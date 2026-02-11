@@ -352,7 +352,7 @@ class gLM2PreTrainedModel(PreTrainedModel):
     supports_gradient_checkpointing = False
 
     # https://github.com/huggingface/transformers/blob/7032e0203262ebb2ebf55da8d2e01f873973e835/src/transformers/models/bert/modeling_bert.py#L748
-    def _init_weights(module, initializer_range=0.02):
+    def _init_weights(self, module, initializer_range=0.02):
         if isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, std=initializer_range)
             if module.bias is not None:
@@ -361,6 +361,22 @@ class gLM2PreTrainedModel(PreTrainedModel):
             nn.init.normal_(module.weight, std=initializer_range)
             if module.padding_idx is not None:
                 nn.init.zeros_(module.weight[module.padding_idx])
+        elif isinstance(module, RotaryEmbedding):
+            # Re-calculate the frequencies using the module's stored attributes
+            inv_freq = 1.0 / (
+                module.base
+                ** (
+                    torch.arange(0, module.dim, 2, device=module.inv_freq.device, dtype=torch.float32)
+                    / module.dim
+                )
+            )
+            # Force the buffer to update
+            with torch.no_grad():
+                module.inv_freq.copy_(inv_freq)
+        elif isinstance(module, RMSNorm):
+            if hasattr(module, "variance_epsilon"):
+                with torch.no_grad():
+                    module.variance_epsilon.fill_(self.config.norm_eps)
 
 
 class gLM2Model(gLM2PreTrainedModel):
@@ -412,7 +428,7 @@ class gLM2ForMaskedLM(gLM2PreTrainedModel):
 
         self.glm2 = gLM2Model(config)
         self.lm_head = gLM2LMHead(config)
-        self.init_weights()
+        self.post_init()
 
     def forward(
         self,
