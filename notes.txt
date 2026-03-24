@@ -1,0 +1,8 @@
+glm2 converts genes sequences (genomic context string including proteins + nearby DNA + strand tokens) into embeddings - encodes neighborhood context
+
+inference means:
+
+load model weights,
+pass sequence tokens through the network (forward pass),
+get outputs like hidden states/logits/embeddings,
+with torch.no_grad()
