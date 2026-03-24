@@ -6,3 +6,15 @@ load model weights,
 pass sequence tokens through the network (forward pass),
 get outputs like hidden states/logits/embeddings,
 with torch.no_grad()
+
+Gaia is basically the search engine that uses those embeddings
+Qdrant is what Gaia uses for vector search, but it's a separate service you run alongside Gaia code.
+its the standard, there are others
+nearest-neighbor lookup engine
+
+Docker is a container for Qdrant to run independently. handles just the dependencies and app
+we run a server locally to handle qdrant. otherwise we would have to use qdrantlocal
+
+glm2 embed is what gaia uses, and returns a pooled embedding for each protein, so however many vectors
+
+ts making a point struct of all of the embeddings that glm2 generated and sticking it in qdrant (the collections that it looks at)
