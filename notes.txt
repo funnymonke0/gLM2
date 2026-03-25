@@ -18,3 +18,5 @@ we run a server locally to handle qdrant. otherwise we would have to use qdrantl
 glm2 embed is what gaia uses, and returns a pooled embedding for each protein, so however many vectors
 
 ts making a point struct of all of the embeddings that glm2 generated and sticking it in qdrant (the collections that it looks at)
+
+docker run -p 6333:6333 qdrant/qdrant
