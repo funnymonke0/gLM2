@@ -238,17 +238,27 @@ proteins_test.csv (1000 proteins)
 
 ✅ **Completed:**
 - Built working batch embedding pipeline
-- Created realistic test dataset (1000 proteins)
-- Optimized performance 10-100x
-- Verified Qdrant integration end-to-end
+- Verified Qdrant integration 
+- can load 1000 test samples but is slow
+
 
 🟡 **In Progress:**
-- Scale to full 1000 proteins (currently 50)
-- Debug exit code 1 error
-- Add output formatting
+- Scale to full database
+- RuntimeError: [enforce fail at alloc_cpu.cpp:117] data. DefaultCPUAllocator: not enough memory: you tried to allocate 20000000000 bytes.
 
 ❌ **Not Started:**
 - Large FASTA file support
 - CSV export
 - Project 2 (plasmid scaling laws)
 
+notes
+-nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Fri_Nov__7_19:25:04_Pacific_Standard_Time_2025
+Cuda compilation tools, release 13.1, V13.1.80
+Build cuda_13.1.r13.1/compiler.36836380_0
+-It encodes a genomic contig as a sequence of protein coding sequences (CDS) and DNA inter-genic sequences (IGS).
+CDS elements are tokenized using per-amino acid tokens, and IGS elements are tokenized using per-nucleotide tokens.
+
+To encode the genomic strand, we prepended each genomic element with a special token, either <+> or <-> to indicate the positive and negative strands.
+To avoid collision between amino acid and nucleotide tokens, the tokenizer expects all amino acids to be uppercase, and all nucleotides to be lowercase.

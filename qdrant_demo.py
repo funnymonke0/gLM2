@@ -6,10 +6,11 @@ import numpy as np
 import pandas as pd
 from huggingface_hub import login
 # Setup
-with open("hf_token.txt", "r") as f:
+with open("token.txt", "r") as f:
     token = f.read().strip()  # Load Hugging Face token from file
 login(token=token)  # Replace with your Hugging Face token if needed
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
 MODEL_DTYPE = torch.bfloat16 if DEVICE.type == "cuda" else torch.float32
 
 # Load gLM2_embed model (for retrieval, not base gLM2)
@@ -21,41 +22,29 @@ tokenizer = AutoTokenizer.from_pretrained('tattabio/gLM2_650M_embed', trust_remo
 print("Connecting to Qdrant on localhost:6333...")
 client = QdrantClient(url="http://localhost:6333")
 
-# Test data: some example proteins
-# test_proteins = {
-#     "protein_1": "<+>MALTKVEKRNRIKRRVRGKISGTQASPRLSVYKSNK",
-#     "protein_2": "<+>MKVLEENLRQQQARKEGLKPVLEWDQTVKK",
-#     "protein_3": "<+>MKKLAVTMLLTASACDEFVQAKEEGLKPVLEWDQ",
-#     "protein_4": "<+>MLGIDNIERVKPGGLELVDRLVAVNRVTKVTKGGRAFGFSAIVVVGNED",
-#     "protein_5": "<+>MKVLEENLRQQQARKEGLKPVLEWDQTVKKEEEEEE",
-# }
+
 print("Loading test proteins from CSV...")
 proteins_df = pd.read_csv("proteins_test.csv")
 print(f"Loaded {len(proteins_df)} proteins:")
-# Batch tokenize all sequences at once
-print("Tokenizing all sequences...")
 all_sequences = proteins_df['sequence'].tolist()
-tokenized = tokenizer(all_sequences, return_tensors='pt', padding=True, truncation=True)
-print(f"Tokenized {len(all_sequences)} sequences. Input IDs shape: {tokenized['input_ids'].shape}")
-# Batch embed all proteins in one forward pass
-print("Generating embeddings for all proteins in a single batch...")
-with torch.no_grad():
-    embeddings = model(
-        input_ids=tokenized['input_ids'].to(DEVICE),
-        attention_mask=tokenized['attention_mask'].to(DEVICE)
-    ).pooler_output.cpu().tolist()  # Shape: (num_proteins, 512)
-print(f"Generated embeddings for {len(embeddings)} proteins. Each embedding shape: {len(embeddings[0])}")
+BATCH_SIZE = 32
+embeddings = []
+
+print(f"Generating embeddings in batches of {BATCH_SIZE}...")
+for i in range(0, len(all_sequences), BATCH_SIZE):
+    batch = all_sequences[i:i + BATCH_SIZE]
+    tokenized = tokenizer(batch, return_tensors='pt', padding=True, truncation=True)
+    with torch.no_grad():
+        batch_emb = model(
+            input_ids=tokenized['input_ids'].to(DEVICE),
+            attention_mask=tokenized['attention_mask'].to(DEVICE)
+        ).pooler_output.float().cpu().tolist()
+    embeddings.extend(batch_emb)
+    print(f"  Batch {i // BATCH_SIZE + 1}/{(len(all_sequences) + BATCH_SIZE - 1) // BATCH_SIZE} done")
+
+print(f"Generated {len(embeddings)} embeddings, each of size {len(embeddings[0])}")
 
 
-# Generate embeddings
-# print("Generating embeddings...")
-# embeddings = {}
-# for protein_id, seq in test_proteins.items():
-#     enc = tokenizer([seq], return_tensors='pt')
-#     with torch.no_grad():
-#         emb = model(enc.input_ids.to(DEVICE)).pooler_output.cpu().numpy()
-#     embeddings[protein_id] = emb[0]  # Shape: (512,)
-#     print(f"  {protein_id}: shape {embeddings[protein_id].shape}")
 
 # Create Qdrant collection
 collection_name = "proteins_test"
@@ -75,7 +64,7 @@ client.create_collection(
 print("Collection created!")
 
 # # Upload embeddings to Qdrant
-# print("\nUploading embeddings to Qdrant...")
+print("\nUploading embeddings to Qdrant...")
 points = [
     PointStruct(
         id=idx,
@@ -91,7 +80,7 @@ client.upsert(
     points=points,
 )
 
-# Query: find similar proteins
+# Query from csv as well
 print("\n" + "="*60)
 print("SEARCH TEST")
 print("="*60)
@@ -103,7 +92,10 @@ print(f"\nQuery: {query_id} = {query_seq}")
 # Embed query
 enc = tokenizer([query_seq], return_tensors='pt') 
 with torch.no_grad():
-    query_emb = model(enc.input_ids.to(DEVICE)).pooler_output.cpu().numpy()[0]
+    query_emb = model(
+        input_ids=enc["input_ids"].to(DEVICE),
+        attention_mask=enc["attention_mask"].to(DEVICE)
+    ).pooler_output.float().cpu().numpy()[0]
 
 # Search in Qdrant
 res =client.query_points(
