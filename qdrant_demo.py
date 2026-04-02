@@ -4,6 +4,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import PointStruct, VectorParams, Distance
 import numpy as np
 import pandas as pd
+
 from huggingface_hub import login
 # Setup
 with open("token.txt", "r") as f:
@@ -24,7 +25,7 @@ client = QdrantClient(url="http://localhost:6333")
 
 
 print("Loading test proteins from CSV...")
-proteins_df = pd.read_csv("proteins_test.csv")
+proteins_df = pd.read_csv("proteins_test.csv")  # Load first 100 proteins for demo
 print(f"Loaded {len(proteins_df)} proteins:")
 all_sequences = proteins_df['sequence'].tolist()
 BATCH_SIZE = 32
@@ -80,39 +81,4 @@ client.upsert(
     points=points,
 )
 
-# Query from csv as well
-print("\n" + "="*60)
-print("SEARCH TEST")
-print("="*60)
-
-query_id = "protein_00001"
-query_seq = proteins_df.loc[proteins_df['protein_id'] == query_id, 'sequence'].values[0]
-print(f"\nQuery: {query_id} = {query_seq}")
-
-# Embed query
-enc = tokenizer([query_seq], return_tensors='pt') 
-with torch.no_grad():
-    query_emb = model(
-        input_ids=enc["input_ids"].to(DEVICE),
-        attention_mask=enc["attention_mask"].to(DEVICE)
-    ).pooler_output.float().cpu().numpy()[0]
-
-# Search in Qdrant
-res =client.query_points(
-    collection_name=collection_name,
-    query=query_emb.tolist(),
-    limit=3,
-)
-results = getattr(res, "points", [])
-
-print(f"\nTop 3 most similar proteins:")
-for i, result in enumerate(results, 1):
-    protein_id = result.payload["protein_id"]
-    similarity = result.score
-    sequence = result.payload["sequence"]
-    print(f"{i}. {protein_id} (similarity: {similarity:.4f})")
-    print(f"   Sequence: {sequence}\n")
-
-print("="*60)
-print("SUCCESS! Qdrant + gLM2_embed working locally.")
-print("="*60)
+print("Embeddings uploaded to Qdrant!")

@@ -226,11 +226,15 @@ proteins_test.csv (1000 proteins)
 
 | Issue | Severity | Status |
 |-------|----------|--------|
-| Script exit code 1 | HIGH | Investigating (possible OOM or API error) |
+| Script exit code 1 | HIGH | Fixed |
 | `.head(50)` limiting proteins | MEDIUM | Intentional, needs removal |
 | No error messages on failure | MEDIUM | Needs try/except blocks |
-| No CSV output | LOW | Feature needed for batch automation |
+| No CSV output | LOW | both csv input and output. fasta interpret needed |
 | Qdrant server must be running | LOW | Docker setup required; documented |
+| need more ram to load samples | LOW | moved to GPU and batched|
+| FASTA | LOW | Biopython |
+|
+
 
 ---
 
@@ -239,17 +243,19 @@ proteins_test.csv (1000 proteins)
 ✅ **Completed:**
 - Built working batch embedding pipeline
 - Verified Qdrant integration 
-- can load 1000 test samples but is slow
+- can load 1000 test samples, (must batch)
 
 
 🟡 **In Progress:**
 - Scale to full database
-- RuntimeError: [enforce fail at alloc_cpu.cpp:117] data. DefaultCPUAllocator: not enough memory: you tried to allocate 20000000000 bytes.
+- 
+- 
 
 ❌ **Not Started:**
 - Large FASTA file support
 - CSV export
 - Project 2 (plasmid scaling laws)
+
 
 notes
 -nvcc: NVIDIA (R) Cuda compiler driver
