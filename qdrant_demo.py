@@ -25,10 +25,10 @@ client = QdrantClient(url="http://localhost:6333")
 
 
 print("Loading test proteins from CSV...")
-proteins_df = pd.read_csv("proteins_test.csv")  # Load first 100 proteins for demo
+proteins_df = pd.read_csv("ref_seq_plasmids.csv").head(50)  # Load first 150 plasmids for demo
 print(f"Loaded {len(proteins_df)} proteins:")
-all_sequences = proteins_df['sequence'].tolist()
-BATCH_SIZE = 32
+all_sequences = proteins_df['contig'].tolist()
+BATCH_SIZE = 64 # number of sequences to embed at once (adjust based on your GPU memory)
 embeddings = []
 
 print(f"Generating embeddings in batches of {BATCH_SIZE}...")
@@ -48,7 +48,7 @@ print(f"Generated {len(embeddings)} embeddings, each of size {len(embeddings[0])
 
 
 # Create Qdrant collection
-collection_name = "proteins_test"
+collection_name = "ref_seq_plasmids"
 print(f"\nCreating Qdrant collection '{collection_name}'...")
 
 # remove old test

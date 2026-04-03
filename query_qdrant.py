@@ -20,13 +20,11 @@ model = AutoModel.from_pretrained('tattabio/gLM2_650M_embed', dtype=MODEL_DTYPE,
 tokenizer = AutoTokenizer.from_pretrained('tattabio/gLM2_650M_embed', trust_remote_code=True)
 
 print("Loading test proteins from CSV...")
-query_proteins_df = pd.read_csv("proteins_test.csv").head(50)
-all_query_sequences = query_proteins_df['sequence'].tolist()
+query_proteins_df = pd.read_csv("ref_seq_plasmids.csv").head(150)  # Load first 150 plasmids for demo
+all_query_sequences = query_proteins_df["contig"].tolist()
 
-
-
-BATCH_SIZE = 32
-collection_name = "proteins_test"
+BATCH_SIZE = 192
+collection_name = "ref_seq_plasmids"
 # Embed query
 q_embeddings = []
 

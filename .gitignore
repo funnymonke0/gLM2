@@ -161,5 +161,7 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 token.txt
-datasets/all.fasta
-datasets/quadrupia_seq_all.fasta
+datasets/plasmid.genomic.fna/plasmid.genomic.fna
+datasets/plasmid.genomic.gbff/plasmid.genomic.gbff
+
+ref_seq_plasmids.csv
