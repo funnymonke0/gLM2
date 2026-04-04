@@ -89,7 +89,7 @@ Practical implication:
 
 ## 5) Current Known Issues (Updated)
 
-1. Critical: GPU OOM risk remains high at current qdrant_demo.py settings.
+1. Critical: GPU OOM risk remains high for settings greater than batch 6 context 4096
 2. Medium: Output is console-only; no structured retrieval results file.
 
 ---
@@ -106,4 +106,6 @@ Practical implication:
 ## 7) Current State Summary
 
 The project has successfully moved from base model inference to a near-complete local semantic retrieval pipeline over plasmid contigs. The largest barrier to reliable execution is resource limitations: loading large datasets like refseq for analysis remains slow on current hardware. Not yet implemented other factors into contig (Quadrupia, invertia)
+
+- for future, we need inter plasmid info, so the g4s count, inverted repeats count, the size of the sequence, that higher level information on top of the intra plasmid stuff (CDS count and DNA context)
 
