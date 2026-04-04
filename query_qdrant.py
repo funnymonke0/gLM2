@@ -19,11 +19,11 @@ print("Loading gLM2_650M_embed model...")
 model = AutoModel.from_pretrained('tattabio/gLM2_650M_embed', dtype=MODEL_DTYPE, trust_remote_code=True).to(DEVICE)
 tokenizer = AutoTokenizer.from_pretrained('tattabio/gLM2_650M_embed', trust_remote_code=True)
 
-print("Loading test proteins from CSV...")
-query_proteins_df = pd.read_csv("ref_seq_plasmids.csv").head(150)  # Load first 150 plasmids for demo
-all_query_sequences = query_proteins_df["contig"].tolist()
+print("Loading test plasmids from CSV...")
+plasmids_df = pd.read_csv("ref_seq_plasmids.csv").head(50)  # Load first 50 plasmids for demo
+all_query_sequences = plasmids_df["contig"].tolist()
 
-BATCH_SIZE = 192
+BATCH_SIZE = 4
 collection_name = "ref_seq_plasmids"
 # Embed query
 q_embeddings = []
@@ -47,13 +47,13 @@ for i, seq in enumerate(all_query_sequences):
     )
     results = getattr(res, "points", [])
 
-    print(f"\nTop 3 most similar proteins:")
+    print(f"\nTop 3 most similar plasmids:")
     for i, result in enumerate(results, 1):
-        protein_id = result.payload["protein_id"]
+        plasmid_id = result.payload["plasmid_id"]
         similarity = result.score
-        sequence = result.payload["sequence"]
-        print(f"{i}. {protein_id} (similarity: {similarity:.4f})")
-        print(f"   Sequence: {sequence}\n")
+        contig = result.payload["contig"]
+        print(f"{i}. {plasmid_id} (similarity: {similarity:.4f})")
+        print(f"   Contig: {contig}\n")
 
 print("="*60)
 print("SUCCESS! Qdrant + gLM2_embed working locally.")

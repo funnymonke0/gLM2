@@ -7,7 +7,7 @@ def format(gbff, fna, output_file):
 
     with open(output_file, 'w') as out_handle:
         writer = csv.writer(out_handle)
-        writer.writerow(["protein_id", "contig"])
+        writer.writerow(["plasmid_id", "contig"])
 
         for record in SeqIO.parse(gbff, "genbank"):
             plasmid_id = record.id  # Get the first word as ID

@@ -24,24 +24,26 @@ print("Connecting to Qdrant on localhost:6333...")
 client = QdrantClient(url="http://localhost:6333")
 
 
-print("Loading test proteins from CSV...")
-proteins_df = pd.read_csv("ref_seq_plasmids.csv").head(50)  # Load first 150 plasmids for demo
-print(f"Loaded {len(proteins_df)} proteins:")
-all_sequences = proteins_df['contig'].tolist()
-BATCH_SIZE = 64 # number of sequences to embed at once (adjust based on your GPU memory)
+print("Loading test plasmids from CSV...")
+plasmids_df = pd.read_csv("ref_seq_plasmids.csv").head(1000)  # Load all plasmids
+print(f"Loaded {len(plasmids_df)} plasmids:")
+all_sequences = plasmids_df['contig'].tolist()
+BATCH_SIZE = 6 # number of sequences to embed at once (adjust based on your GPU memory)
+MAX_SEQ_LEN = 4096  # expected context length of plasmids (adjust if needed)
 embeddings = []
 
 print(f"Generating embeddings in batches of {BATCH_SIZE}...")
 for i in range(0, len(all_sequences), BATCH_SIZE):
     batch = all_sequences[i:i + BATCH_SIZE]
-    tokenized = tokenizer(batch, return_tensors='pt', padding=True, truncation=True)
+    tokenized = tokenizer(batch, return_tensors='pt', padding=True, truncation=True, max_length=MAX_SEQ_LEN)
     with torch.no_grad():
         batch_emb = model(
             input_ids=tokenized['input_ids'].to(DEVICE),
             attention_mask=tokenized['attention_mask'].to(DEVICE)
         ).pooler_output.float().cpu().tolist()
     embeddings.extend(batch_emb)
-    print(f"  Batch {i // BATCH_SIZE + 1}/{(len(all_sequences) + BATCH_SIZE - 1) // BATCH_SIZE} done")
+    if DEVICE.type == "cuda":
+        torch.cuda.empty_cache()
 
 print(f"Generated {len(embeddings)} embeddings, each of size {len(embeddings[0])}")
 
@@ -70,9 +72,9 @@ points = [
     PointStruct(
         id=idx,
         vector=emb,
-        payload={"protein_id": protein_id, "sequence": seq}
+        payload={"plasmid_id": plasmid_id, "contig": seq}
     )
-    for idx, (protein_id, seq, emb) in enumerate(zip(proteins_df['protein_id'], proteins_df['sequence'], embeddings))
+    for idx, (plasmid_id, seq, emb) in enumerate(zip(plasmids_df['plasmid_id'], plasmids_df['contig'], embeddings))
 ]
 
 
