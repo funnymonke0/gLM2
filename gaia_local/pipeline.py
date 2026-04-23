@@ -13,7 +13,7 @@ from gaia_local.controls import make_control_records, sequence_identity
 from gaia_local.embedder import GLM2Embedder
 from gaia_local.fasta_io import load_fasta_records, resolve_fasta_inputs
 from gaia_local.metrics import stage_metrics_dict, timed_stage, write_json
-from gaia_local.omg_io import load_omg_records
+from gaia_local.omg_io import iter_omg_record_batches, load_omg_records
 from gaia_local.qdrant_store import create_qdrant_client, ensure_collection, recreate_collection, upsert_records
 from gaia_local.types import SequenceRecord
 
@@ -34,14 +34,13 @@ def index_corpus(
     excluded_ids: set[str],
     output_json: Path | None,
 ) -> dict:
+    normalized_limit = None if omg_limit is None or omg_limit <= 0 else omg_limit
     if corpus_source == "fasta":
         if not corpus_paths:
             raise ValueError("--corpus is required when --corpus-source=fasta")
         records = load_fasta_records(corpus_paths, excluded_ids=excluded_ids)
         corpus_inputs = [str(path.resolve()) for path in resolve_fasta_inputs(corpus_paths)]
     elif corpus_source == "omg":
-        normalized_limit = None if omg_limit is None or omg_limit <= 0 else omg_limit
-        records = load_omg_records(split=omg_split, limit=normalized_limit, streaming=omg_streaming)
         corpus_inputs = [f"hf://tattabio/OMG/{omg_split}"]
     else:
         raise ValueError(f"Unsupported corpus source: {corpus_source}")
@@ -51,9 +50,58 @@ def index_corpus(
     batch_log_path = metrics_dir / DEFAULT_INDEX_BATCH_LOG
     if batch_log_path.exists():
         batch_log_path.unlink()
-    embeddings, embed_metrics = embedder.embed_records(records, batch_log_path=batch_log_path)
-    ensure_collection(client, collection_name, embeddings.shape[1], recreate=recreate)
-    upsert_metrics = upsert_records(client, collection_name, records, embeddings, batch_size=batch_size)
+
+    if corpus_source == "omg" and omg_streaming:
+        embed_metrics = []
+        upsert_metrics = []
+        record_count = 0
+        next_point_id = 0
+        vector_size: int | None = None
+
+        for batch_index, records_batch in enumerate(
+            iter_omg_record_batches(
+                split=omg_split,
+                limit=normalized_limit,
+                streaming=omg_streaming,
+                batch_size=batch_size,
+            ),
+            start=1,
+        ):
+            batch_embeddings, batch_metrics = embedder.embed_batch(
+                records_batch,
+                batch_log_path=batch_log_path,
+                batch_index=batch_index,
+            )
+            embed_metrics.append(batch_metrics)
+
+            if vector_size is None:
+                vector_size = int(batch_embeddings.shape[1])
+                ensure_collection(client, collection_name, vector_size, recreate=recreate)
+
+            upsert_metrics.extend(
+                upsert_records(
+                    client,
+                    collection_name,
+                    records_batch,
+                    batch_embeddings,
+                    batch_size=len(records_batch),
+                    point_id_offset=next_point_id,
+                )
+            )
+            next_point_id += len(records_batch)
+            record_count += len(records_batch)
+
+        if record_count == 0 or vector_size is None:
+            raise ValueError("No OMG records were loaded.")
+    else:
+        if corpus_source == "omg":
+            records = load_omg_records(split=omg_split, limit=normalized_limit, streaming=omg_streaming)
+        embeddings, embed_metrics = embedder.embed_records(records, batch_log_path=batch_log_path)
+        ensure_collection(client, collection_name, embeddings.shape[1], recreate=recreate)
+        upsert_metrics = upsert_records(client, collection_name, records, embeddings, batch_size=batch_size)
+        record_count = len(records)
+        vector_size = int(embeddings.shape[1])
+
     report = {
         "mode": "index",
         "model_name": model_name,
@@ -62,8 +110,8 @@ def index_corpus(
         "qdrant_url": qdrant_url,
         "corpus_source": corpus_source,
         "collection_name": collection_name,
-        "record_count": len(records),
-        "vector_size": int(embeddings.shape[1]),
+        "record_count": record_count,
+        "vector_size": vector_size,
         "corpus_inputs": corpus_inputs,
         "excluded_ids": sorted(excluded_ids),
         "load_metrics": stage_metrics_dict(embedder.load_metrics),

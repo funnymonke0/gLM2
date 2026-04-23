@@ -31,6 +31,7 @@ def upsert_records(
     records: Sequence[SequenceRecord],
     embeddings: np.ndarray,
     batch_size: int,
+    point_id_offset: int = 0,
 ) -> list[StageMetrics]:
     metrics: list[StageMetrics] = []
     for start in range(0, len(records), batch_size):
@@ -38,7 +39,8 @@ def upsert_records(
         batch_embeddings = embeddings[start : start + batch_size]
         batch_done = timed_stage("qdrant_upsert_batch", item_count=len(batch))
         points = []
-        for offset, (record, embedding) in enumerate(zip(batch, batch_embeddings), start=start):
+        first_point_id = point_id_offset + start
+        for offset, (record, embedding) in enumerate(zip(batch, batch_embeddings), start=first_point_id):
             points.append(
                 PointStruct(
                     id=offset,

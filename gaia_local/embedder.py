@@ -18,9 +18,13 @@ def format_for_glm2(sequence: str, strand_token: str = "<+>") -> str:
 
 def choose_device() -> tuple[torch.device, torch.dtype]:
     if torch.cuda.is_available():
+        print("CUDA is available. Using GPU for embedding.")
         if torch.cuda.is_bf16_supported():
+            print("Using bfloat16 precision.")
             return torch.device("cuda"), torch.bfloat16
+        print("Using float16 precision.")
         return torch.device("cuda"), torch.float16
+    print("CUDA is not available. Using CPU for embedding.")
     return torch.device("cpu"), torch.float32
 
 
@@ -42,36 +46,49 @@ class GLM2Embedder:
         self.model.eval()
         self.load_metrics = load_done()
 
+    def embed_batch(
+        self,
+        records: Sequence[SequenceRecord],
+        batch_log_path=None,
+        batch_index: int | None = None,
+    ) -> tuple[np.ndarray, StageMetrics]:
+        batch_done = timed_stage("embed_batch", item_count=len(records))
+        texts = [format_for_glm2(record.sequence) for record in records]
+        encodings = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.max_seq_length,
+        )
+        encodings = {name: tensor.to(self.device) for name, tensor in encodings.items()}
+        with torch.no_grad():
+            outputs = self.model(**encodings)
+            batch_embeddings = self.extract_embeddings(outputs, encodings["attention_mask"])
+
+        batch_metrics = batch_done()
+        if batch_log_path is not None:
+            payload = {
+                "record_ids": [record.seq_id for record in records],
+                **stage_metrics_dict(batch_metrics),
+            }
+            if batch_index is not None:
+                payload["batch_index"] = batch_index
+            append_jsonl(batch_log_path, payload)
+        return batch_embeddings.cpu().numpy(), batch_metrics
+
     def embed_records(self, records: Sequence[SequenceRecord], batch_log_path=None) -> tuple[np.ndarray, list[StageMetrics]]:
         embeddings: list[np.ndarray] = []
         metrics: list[StageMetrics] = []
         for batch_index, start in enumerate(range(0, len(records), self.batch_size), start=1):
             batch = records[start : start + self.batch_size]
-            batch_done = timed_stage("embed_batch", item_count=len(batch))
-            texts = [format_for_glm2(record.sequence) for record in batch]
-            encodings = self.tokenizer(
-                texts,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.max_seq_length,
+            batch_embeddings, batch_metrics = self.embed_batch(
+                batch,
+                batch_log_path=batch_log_path,
+                batch_index=batch_index,
             )
-            encodings = {name: tensor.to(self.device) for name, tensor in encodings.items()}
-            with torch.no_grad():
-                outputs = self.model(**encodings)
-                batch_embeddings = self.extract_embeddings(outputs, encodings["attention_mask"])
-            embeddings.append(batch_embeddings.cpu().numpy())
-            batch_metrics = batch_done()
+            embeddings.append(batch_embeddings)
             metrics.append(batch_metrics)
-            if batch_log_path is not None:
-                append_jsonl(
-                    batch_log_path,
-                    {
-                        "batch_index": batch_index,
-                        "record_ids": [record.seq_id for record in batch],
-                        **stage_metrics_dict(batch_metrics),
-                    },
-                )
         stacked = np.concatenate(embeddings, axis=0) if embeddings else np.zeros((0, 0), dtype=np.float32)
         return stacked, metrics
 

@@ -8,11 +8,14 @@ from gaia_local.types import SequenceRecord
 def _iter_omg_rows(split: str, streaming: bool) -> Iterator[dict]:
     ds = datasets.load_dataset("tattabio/OMG", split=split, streaming=streaming)
     for row in ds:
-        yield row
+        if isinstance(row, dict):
+            yield row
+        elif hasattr(row, "items"):
+            yield dict(row)
 
 
-def load_omg_records(split: str = "train", limit: int | None = None, streaming: bool = True) -> list[SequenceRecord]:
-    records: list[SequenceRecord] = []
+def iter_omg_records(split: str = "train", limit: int | None = None, streaming: bool = True) -> Iterator[SequenceRecord]:
+    produced = False
     for row_index, row in enumerate(_iter_omg_rows(split=split, streaming=streaming)):
         cds_seqs = row.get("CDS_seqs") or []
         cds_ids = row.get("CDS_ids") or []
@@ -25,18 +28,40 @@ def load_omg_records(split: str = "train", limit: int | None = None, streaming: 
             orientation_token = "<+>" if orient else "<->"
             seq_id = cds_ids[cds_index] if cds_index < len(cds_ids) and cds_ids[cds_index] else f"{split}_row{row_index}_cds{cds_index}"
             sequence = f"{orientation_token}{str(seq).upper()}"
-            records.append(
-                SequenceRecord(
-                    seq_id=seq_id,
-                    description=str(seq_id),
-                    sequence=sequence,
-                    source_path=f"hf://tattabio/OMG/{split}",
-                )
+            produced = True
+            yield SequenceRecord(
+                seq_id=seq_id,
+                description=str(seq_id),
+                sequence=sequence,
+                source_path=f"hf://tattabio/OMG/{split}",
             )
 
         if limit is not None and (row_index + 1) >= limit:
             break
 
-    if not records:
+    if not produced:
         raise ValueError("No OMG records were loaded.")
-    return records
+
+
+def iter_omg_record_batches(
+    split: str = "train",
+    limit: int | None = None,
+    streaming: bool = True,
+    batch_size: int = 8,
+) -> Iterator[list[SequenceRecord]]:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero.")
+
+    batch: list[SequenceRecord] = []
+    for record in iter_omg_records(split=split, limit=limit, streaming=streaming):
+        batch.append(record)
+        if len(batch) >= batch_size:
+            yield batch
+            batch = []
+
+    if batch:
+        yield batch
+
+
+def load_omg_records(split: str = "train", limit: int | None = None, streaming: bool = True) -> list[SequenceRecord]:
+    return list(iter_omg_records(split=split, limit=limit, streaming=streaming))
