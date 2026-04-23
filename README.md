@@ -48,6 +48,53 @@ with torch.no_grad():
     embeddings = model(encodings.input_ids.cuda(), output_hidden_states=True).last_hidden_state
 ```
 
+## Local SeqHub Workflow
+
+This repository now includes a local SeqHub-style pipeline that:
+
+- reads one or more FASTA files or directories,
+- prepends the same strand token (`<+>`) for both corpus and query proteins,
+- embeds sequences with `tattabio/gLM2_650M_embed`,
+- sends vectors to a Docker-hosted Qdrant instance (default `http://localhost:6333`), and
+- writes per-batch timing plus VRAM reports under `artifacts/metrics`.
+
+Start Qdrant with Docker:
+
+```bash
+docker run -d --name qdrant -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+```
+
+Install the runtime dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Run the end-to-end local benchmark with the included P02981 fixture and SeqHub reference matches:
+
+```bash
+python main.py benchmark --corpus seqhub_matches.fa --query-fasta datasets/P02981.fasta --expected-fasta seqhub_matches.fa --collection-name seqhub_local_benchmark --qdrant-url http://localhost:6333 --recreate --top-k 10
+```
+
+Index an arbitrary local corpus:
+
+```bash
+python qdrant_load.py index --corpus path/to/corpus.fasta another_corpus_dir --collection-name my_collection --qdrant-url http://localhost:6333 --recreate
+```
+
+Query an existing local collection:
+
+```bash
+python query_qdrant.py query --query-fasta datasets/P02981.fasta --collection-name my_collection --qdrant-url http://localhost:6333 --expected-fasta seqhub_matches.fa --top-k 10
+```
+
+The benchmark run writes these files:
+
+- `artifacts/metrics/index_batches.jsonl`: per-batch embedding timing and VRAM stats.
+- `artifacts/metrics/index_summary.json`: corpus indexing summary.
+- `artifacts/metrics/query_summary.json`: query-stage summary.
+- `artifacts/metrics/benchmark_summary.json`: combined benchmark output, including control validation against exact, mutant, reversed, and shuffled query variants.
+
 ## Scripts
 
 We provide a [script](https://github.com/TattaBio/gLM2/blob/main/categorical_jacobian_gLM2.ipynb) to visualize protein-protein interaction by computing the gLM2 categorical jacobian ([Zhang et al. 2024](https://www.biorxiv.org/content/10.1101/2024.01.30.577970v1)).

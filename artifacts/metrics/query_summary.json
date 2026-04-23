@@ -1,0 +1,125 @@
+{
+  "mode": "query",
+  "model_name": "tattabio/gLM2_650M_embed",
+  "device": "cpu",
+  "dtype": "torch.float32",
+  "qdrant_url": "http://localhost:6333",
+  "collection_name": "gaia_omg_test_run",
+  "query_inputs": [
+    "C:\\Users\\slice\\OneDrive\\Documents\\GitHub\\gLM2\\P02981.fasta"
+  ],
+  "top_k": 10,
+  "load_metrics": {
+    "stage": "model_load",
+    "seconds": 0.9551377999596298,
+    "cuda_peak_allocated_bytes": null,
+    "cuda_peak_reserved_bytes": null,
+    "items": null,
+    "cuda_peak_allocated_mib": null,
+    "cuda_peak_reserved_mib": null
+  },
+  "embed_metrics": [
+    {
+      "stage": "embed_batch",
+      "seconds": 1.6371351999696344,
+      "cuda_peak_allocated_bytes": null,
+      "cuda_peak_reserved_bytes": null,
+      "items": 1,
+      "cuda_peak_allocated_mib": null,
+      "cuda_peak_reserved_mib": null
+    }
+  ],
+  "query_metrics": {
+    "stage": "qdrant_query",
+    "seconds": 0.012752600014209747,
+    "cuda_peak_allocated_bytes": null,
+    "cuda_peak_reserved_bytes": null,
+    "items": 1,
+    "cuda_peak_allocated_mib": null,
+    "cuda_peak_reserved_mib": null
+  },
+  "results": [
+    {
+      "query_id": "sp|P02981|TCR3_ECOLX",
+      "query_length": 396,
+      "hits": [
+        {
+          "seq_id": "ERZ783397|ERZ783397.10-NODE-10-length-65173-cov-32.518382|CDS|ERZ783397.10-NODE-10-length-65173-cov-32.518382_37|-|40918:42159",
+          "description": "ERZ783397|ERZ783397.10-NODE-10-length-65173-cov-32.518382|CDS|ERZ783397.10-NODE-10-length-65173-cov-32.518382_37|-|40918:42159",
+          "score": 0.8941761,
+          "sequence_identity_to_query": 0.086538,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "7000000126|SRS043772_WUGC_scaffold_24636|CDS|SRS043772_WUGC_scaffold_24636__gene_20198|-|3138:4319",
+          "description": "7000000126|SRS043772_WUGC_scaffold_24636|CDS|SRS043772_WUGC_scaffold_24636__gene_20198|-|3138:4319",
+          "score": 0.87436193,
+          "sequence_identity_to_query": 0.085859,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.201-NODE-201-length-9457-cov-9.513720|CDS|ERZ783397.201-NODE-201-length-9457-cov-9.513720_7|-|6629:8017",
+          "description": "ERZ783397|ERZ783397.201-NODE-201-length-9457-cov-9.513720|CDS|ERZ783397.201-NODE-201-length-9457-cov-9.513720_7|-|6629:8017",
+          "score": 0.87362844,
+          "sequence_identity_to_query": 0.073118,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.276-NODE-276-length-6530-cov-3.485251|CDS|ERZ783397.276-NODE-276-length-6530-cov-3.485251_6|+|3056:4279",
+          "description": "ERZ783397|ERZ783397.276-NODE-276-length-6530-cov-3.485251|CDS|ERZ783397.276-NODE-276-length-6530-cov-3.485251_6|+|3056:4279",
+          "score": 0.87333894,
+          "sequence_identity_to_query": 0.073171,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.41-NODE-41-length-32404-cov-32.237782|CDS|ERZ783397.41-NODE-41-length-32404-cov-32.237782_11|+|12595:13803",
+          "description": "ERZ783397|ERZ783397.41-NODE-41-length-32404-cov-32.237782|CDS|ERZ783397.41-NODE-41-length-32404-cov-32.237782_11|+|12595:13803",
+          "score": 0.8724612,
+          "sequence_identity_to_query": 0.066667,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.15-NODE-15-length-56869-cov-30.138364|CDS|ERZ783397.15-NODE-15-length-56869-cov-30.138364_14|+|9374:10570",
+          "description": "ERZ783397|ERZ783397.15-NODE-15-length-56869-cov-30.138364|CDS|ERZ783397.15-NODE-15-length-56869-cov-30.138364_14|+|9374:10570",
+          "score": 0.8719325,
+          "sequence_identity_to_query": 0.084788,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.212-NODE-212-length-8834-cov-3.670805|CDS|ERZ783397.212-NODE-212-length-8834-cov-3.670805_3|+|1311:2567",
+          "description": "ERZ783397|ERZ783397.212-NODE-212-length-8834-cov-3.670805|CDS|ERZ783397.212-NODE-212-length-8834-cov-3.670805_3|+|1311:2567",
+          "score": 0.8713182,
+          "sequence_identity_to_query": 0.08076,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.3-NODE-3-length-88255-cov-31.703265|CDS|ERZ783397.3-NODE-3-length-88255-cov-31.703265_56|-|58232:59464",
+          "description": "ERZ783397|ERZ783397.3-NODE-3-length-88255-cov-31.703265|CDS|ERZ783397.3-NODE-3-length-88255-cov-31.703265_56|-|58232:59464",
+          "score": 0.8708378,
+          "sequence_identity_to_query": 0.094431,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "7000000126|SRS043772_WUGC_scaffold_44371|CDS|SRS043772_WUGC_scaffold_44371__gene_48871|-|3398:4741",
+          "description": "7000000126|SRS043772_WUGC_scaffold_44371|CDS|SRS043772_WUGC_scaffold_44371__gene_48871|-|3398:4741",
+          "score": 0.86978126,
+          "sequence_identity_to_query": 0.06,
+          "source_path": "hf://tattabio/OMG/train"
+        },
+        {
+          "seq_id": "ERZ783397|ERZ783397.117-NODE-117-length-17583-cov-31.714000|CDS|ERZ783397.117-NODE-117-length-17583-cov-31.714000_7|+|5943:7139",
+          "description": "ERZ783397|ERZ783397.117-NODE-117-length-17583-cov-31.714000|CDS|ERZ783397.117-NODE-117-length-17583-cov-31.714000_7|+|5943:7139",
+          "score": 0.8689396,
+          "sequence_identity_to_query": 0.0798,
+          "source_path": "hf://tattabio/OMG/train"
+        }
+      ],
+      "expected_top_1": "2848905985|Ga0398538_01|CDS|2848909876|reverse|4081006:4082196",
+      "actual_top_1": "ERZ783397|ERZ783397.10-NODE-10-length-65173-cov-32.518382|CDS|ERZ783397.10-NODE-10-length-65173-cov-32.518382_37|-|40918:42159",
+      "top_1_matches_reference": false,
+      "overlap_at_5": 0,
+      "overlap_at_10": 0,
+      "reference_rank_of_actual_top_1": null
+    }
+  ]
+}
