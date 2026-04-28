@@ -29,11 +29,12 @@ def choose_device() -> tuple[torch.device, torch.dtype]:
 
 
 class GLM2Embedder:
-    def __init__(self, model_name: str, batch_size: int, max_seq_length: int):
+    def __init__(self, model_name: str, batch_size: int, max_seq_length: int, auto_batch_size: bool = True):
         maybe_login_from_token_file()
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_seq_length = max_seq_length
+        self.auto_batch_size = auto_batch_size
         self.device, self.dtype = choose_device()
 
         load_done = timed_stage("model_load")
@@ -45,6 +46,15 @@ class GLM2Embedder:
         ).to(self.device)
         self.model.eval()
         self.load_metrics = load_done()
+
+    @staticmethod
+    def _is_oom_error(exc: BaseException) -> bool:
+        message = str(exc).lower()
+        return "out of memory" in message or "cuda error: out of memory" in message
+
+    def _clear_cuda_cache(self) -> None:
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
 
     def embed_batch(
         self,
@@ -80,15 +90,31 @@ class GLM2Embedder:
     def embed_records(self, records: Sequence[SequenceRecord], batch_log_path=None) -> tuple[np.ndarray, list[StageMetrics]]:
         embeddings: list[np.ndarray] = []
         metrics: list[StageMetrics] = []
-        for batch_index, start in enumerate(range(0, len(records), self.batch_size), start=1):
-            batch = records[start : start + self.batch_size]
-            batch_embeddings, batch_metrics = self.embed_batch(
-                batch,
-                batch_log_path=batch_log_path,
-                batch_index=batch_index,
-            )
+        effective_batch_size = self.batch_size
+        batch_index = 1
+        position = 0
+        while position < len(records):
+            batch = records[position : position + effective_batch_size]
+            try:
+                batch_embeddings, batch_metrics = self.embed_batch(
+                    batch,
+                    batch_log_path=batch_log_path,
+                    batch_index=batch_index,
+                )
+            except RuntimeError as exc:
+                if not self.auto_batch_size or not self._is_oom_error(exc) or effective_batch_size <= 1:
+                    raise
+                effective_batch_size = max(1, effective_batch_size // 2)
+                print(f"OOM at batch size {len(batch)}. Reducing to {effective_batch_size} and retrying.")
+                self._clear_cuda_cache()
+                continue
             embeddings.append(batch_embeddings)
             metrics.append(batch_metrics)
+            position += len(batch)
+            batch_index += 1
+
+        if self.auto_batch_size and effective_batch_size < self.batch_size:
+            self.batch_size = effective_batch_size
         stacked = np.concatenate(embeddings, axis=0) if embeddings else np.zeros((0, 0), dtype=np.float32)
         return stacked, metrics
 

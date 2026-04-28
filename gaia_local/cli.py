@@ -37,21 +37,25 @@ def parse_args() -> argparse.Namespace: #so it goes seqhub_local.py command --ar
 
 def add_shared_runtime_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
-    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--no-auto-batch-size", dest="auto_batch_size", action="store_false", help="Disable automatic batch-size backoff on OOM.")
+    parser.set_defaults(auto_batch_size=True)
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH)
     parser.add_argument("--metrics-dir", type=Path, default=DEFAULT_METRICS_DIR)
 
 
 def add_shared_index_args(parser: argparse.ArgumentParser) -> None:
     add_shared_runtime_args(parser)
-    parser.add_argument("--corpus-source", choices=["fasta", "omg"], default="omg", help="Source used for indexing records.")
+    parser.add_argument("--corpus-source", choices=["fasta", "stream"], default="stream", help="Source used for indexing records.")
     parser.add_argument("--corpus", type=Path, nargs="*", help="One or more FASTA files or directories to index when --corpus-source=fasta.")
-    parser.add_argument("--omg-split", default="train", help="OMG split to load when --corpus-source=omg.")
-    parser.add_argument("--omg-limit", type=int, default=200, help="Maximum OMG rows to load (use 0 or negative for no limit).")
-    parser.add_argument("--omg-streaming", action="store_true", default=True, help="Stream OMG rows instead of full download (default: true).")
-    parser.add_argument("--no-omg-streaming", dest="omg_streaming", action="store_false", help="Disable OMG streaming mode.")
+    parser.add_argument("--stream-split", default="train", help="stream split to load when --corpus-source=stream.")
+    parser.add_argument("--stream-limit", type=int, default=200, help="Maximum stream records to load (use 0 or negative for no limit).")
+    parser.add_argument("--no-streaming", dest="streaming", action="store_false", help="Disable stream streaming mode.")
+    parser.set_defaults(streaming=True)
     parser.add_argument("--collection-name", default=DEFAULT_COLLECTION_NAME)
     parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL, help="Docker-hosted Qdrant URL, typically http://localhost:6333.")
     parser.add_argument("--exclude-header", action="append", default=["Query"], help="FASTA record ids to exclude during indexing.")
     parser.add_argument("--recreate", action="store_true", help="Delete and recreate the collection before indexing.")
+    parser.add_argument("--batch-log", dest="batch_log", action="store_true", help="Enable per-batch JSONL metrics logging during indexing.")
+    parser.set_defaults(batch_log=False)  # Default to no batch log unless explicitly enabled
     parser.add_argument("--output-json", type=Path, help="Optional explicit output path for the index report JSON.")

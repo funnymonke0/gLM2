@@ -11,4 +11,8 @@ def maybe_login_from_token_file() -> None:
     if token is None and token_path.exists():
         token = token_path.read_text(encoding="utf-8").strip()
     if token:
-        login(token=token, add_to_git_credential=False)
+        try:
+            login(token=token, add_to_git_credential=False)
+            print("Logged in to Hugging Face Hub successfully.")
+        except Exception as e:
+            print(f"Failed to log in to Hugging Face Hub: {e}")

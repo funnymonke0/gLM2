@@ -12,3 +12,4 @@ DEFAULT_MAX_SEQ_LENGTH = 4096
 CONTROL_COLLECTION_NAME = "seqhub_validation_controls"
 FASTA_SUFFIXES = {".fa", ".faa", ".fasta", ".fna"}
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
+DATASET = "tattabio/OG_prot90"

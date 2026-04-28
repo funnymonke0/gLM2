@@ -4,6 +4,7 @@ from typing import Sequence
 
 from gaia_local.constants import (
     CONTROL_COLLECTION_NAME,
+    DATASET,
     DEFAULT_BENCHMARK_SUMMARY,
     DEFAULT_INDEX_BATCH_LOG,
     DEFAULT_INDEX_SUMMARY,
@@ -13,7 +14,7 @@ from gaia_local.controls import make_control_records, sequence_identity
 from gaia_local.embedder import GLM2Embedder
 from gaia_local.fasta_io import load_fasta_records, resolve_fasta_inputs
 from gaia_local.metrics import stage_metrics_dict, timed_stage, write_json
-from gaia_local.omg_io import iter_omg_record_batches, load_omg_records
+from gaia_local.omg_io import iter_stream_record_batches, load_stream_records
 from gaia_local.qdrant_store import create_qdrant_client, ensure_collection, recreate_collection, upsert_records
 from gaia_local.types import SequenceRecord
 
@@ -21,58 +22,59 @@ from gaia_local.types import SequenceRecord
 def index_corpus(
     corpus_paths: Sequence[Path] | None,
     corpus_source: str,
-    omg_split: str,
-    omg_limit: int | None,
-    omg_streaming: bool,
+    stream_split: str,
+    stream_limit: int | None,
+    streaming: bool,
+    batch_log: bool,
     model_name: str,
     collection_name: str,
     qdrant_url: str,
     batch_size: int,
+    auto_batch_size: bool,
     max_seq_length: int,
     metrics_dir: Path,
     recreate: bool,
     excluded_ids: set[str],
     output_json: Path | None,
 ) -> dict:
-    normalized_limit = None if omg_limit is None or omg_limit <= 0 else omg_limit
+    normalized_limit = None if stream_limit is None or stream_limit <= 0 else stream_limit
+    records: list[SequenceRecord] = []
     if corpus_source == "fasta":
         if not corpus_paths:
             raise ValueError("--corpus is required when --corpus-source=fasta")
         records = load_fasta_records(corpus_paths, excluded_ids=excluded_ids)
         corpus_inputs = [str(path.resolve()) for path in resolve_fasta_inputs(corpus_paths)]
-    elif corpus_source == "omg":
-        corpus_inputs = [f"hf://tattabio/OMG/{omg_split}"]
+    elif corpus_source == "stream":
+        corpus_inputs = [f"hf://{DATASET}/{stream_split}"]
     else:
         raise ValueError(f"Unsupported corpus source: {corpus_source}")
 
-    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size, max_seq_length=max_seq_length)
+    embedder = GLM2Embedder(
+        model_name=model_name,
+        batch_size=batch_size,
+        max_seq_length=max_seq_length,
+        auto_batch_size=auto_batch_size,
+    )
     client = create_qdrant_client(qdrant_url)
-    batch_log_path = metrics_dir / DEFAULT_INDEX_BATCH_LOG
-    if batch_log_path.exists():
+    batch_log_path = (metrics_dir / DEFAULT_INDEX_BATCH_LOG) if batch_log else None
+    if batch_log_path is not None and batch_log_path.exists():
         batch_log_path.unlink()
 
-    if corpus_source == "omg" and omg_streaming:
+    if corpus_source == "stream" and streaming:
         embed_metrics = []
         upsert_metrics = []
         record_count = 0
         next_point_id = 0
         vector_size: int | None = None
 
-        for batch_index, records_batch in enumerate(
-            iter_omg_record_batches(
-                split=omg_split,
-                limit=normalized_limit,
-                streaming=omg_streaming,
-                batch_size=batch_size,
-            ),
-            start=1,
+        for records_batch in iter_stream_record_batches(
+            split=stream_split,
+            limit=normalized_limit,
+            streaming=streaming,
+            batch_size=batch_size,
         ):
-            batch_embeddings, batch_metrics = embedder.embed_batch(
-                records_batch,
-                batch_log_path=batch_log_path,
-                batch_index=batch_index,
-            )
-            embed_metrics.append(batch_metrics)
+            batch_embeddings, batch_metrics = embedder.embed_records(records_batch, batch_log_path=batch_log_path)
+            embed_metrics.extend(batch_metrics)
 
             if vector_size is None:
                 vector_size = int(batch_embeddings.shape[1])
@@ -92,10 +94,10 @@ def index_corpus(
             record_count += len(records_batch)
 
         if record_count == 0 or vector_size is None:
-            raise ValueError("No OMG records were loaded.")
+            raise ValueError(f"No stream records were loaded for split '{stream_split}'.")
     else:
-        if corpus_source == "omg":
-            records = load_omg_records(split=omg_split, limit=normalized_limit, streaming=omg_streaming)
+        if corpus_source == "stream":
+            records = load_stream_records(split=stream_split, limit=normalized_limit, streaming=streaming)
         embeddings, embed_metrics = embedder.embed_records(records, batch_log_path=batch_log_path)
         ensure_collection(client, collection_name, embeddings.shape[1], recreate=recreate)
         upsert_metrics = upsert_records(client, collection_name, records, embeddings, batch_size=batch_size)
@@ -117,7 +119,7 @@ def index_corpus(
         "load_metrics": stage_metrics_dict(embedder.load_metrics),
         "embed_metrics": [stage_metrics_dict(metric) for metric in embed_metrics],
         "upsert_metrics": [stage_metrics_dict(metric) for metric in upsert_metrics],
-        "index_batch_log": str(batch_log_path.resolve()),
+        "index_batch_log": str(batch_log_path.resolve()) if batch_log_path is not None else None,
     }
     summary_path = output_json or (metrics_dir / DEFAULT_INDEX_SUMMARY)
     write_json(summary_path, report)
@@ -131,6 +133,7 @@ def query_collection(
     collection_name: str,
     qdrant_url: str,
     batch_size: int,
+    auto_batch_size: bool,
     max_seq_length: int,
     metrics_dir: Path,
     top_k: int,
@@ -138,7 +141,12 @@ def query_collection(
     output_json: Path | None,
 ) -> dict:
     query_records = load_fasta_records(query_paths)
-    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size, max_seq_length=max_seq_length)
+    embedder = GLM2Embedder(
+        model_name=model_name,
+        batch_size=batch_size,
+        max_seq_length=max_seq_length,
+        auto_batch_size=auto_batch_size,
+    )
     client = create_qdrant_client(qdrant_url)
     query_embeddings, embed_metrics = embedder.embed_records(query_records)
     query_done = timed_stage("qdrant_query", item_count=len(query_records))
@@ -203,10 +211,16 @@ def validate_controls(
     model_name: str,
     qdrant_url: str,
     batch_size: int,
+    auto_batch_size: bool,
     max_seq_length: int,
 ) -> dict:
     controls = make_control_records(query_record)
-    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size, max_seq_length=max_seq_length)
+    embedder = GLM2Embedder(
+        model_name=model_name,
+        batch_size=batch_size,
+        max_seq_length=max_seq_length,
+        auto_batch_size=auto_batch_size,
+    )
     client = create_qdrant_client(qdrant_url)
     embeddings, embed_metrics = embedder.embed_records(controls)
     recreate_collection(client, CONTROL_COLLECTION_NAME, embeddings.shape[1])
@@ -228,13 +242,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
     index_report = index_corpus(
         corpus_paths=args.corpus,
         corpus_source=args.corpus_source,
-        omg_split=args.omg_split,
-        omg_limit=args.omg_limit,
-        omg_streaming=args.omg_streaming,
+        stream_split=args.stream_split,
+        stream_limit=args.stream_limit,
+        streaming=args.streaming,
+        batch_log=args.batch_log,
         model_name=args.model_name,
         collection_name=args.collection_name,
         qdrant_url=args.qdrant_url,
         batch_size=args.batch_size,
+        auto_batch_size=args.auto_batch_size,
         max_seq_length=args.max_seq_length,
         metrics_dir=args.metrics_dir,
         recreate=args.recreate,
@@ -247,6 +263,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         model_name=args.model_name,
         qdrant_url=args.qdrant_url,
         batch_size=args.batch_size,
+        auto_batch_size=args.auto_batch_size,
         max_seq_length=args.max_seq_length,
     )
     query_report = query_collection(
@@ -255,6 +272,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         collection_name=args.collection_name,
         qdrant_url=args.qdrant_url,
         batch_size=args.batch_size,
+        auto_batch_size=args.auto_batch_size,
         max_seq_length=args.max_seq_length,
         metrics_dir=args.metrics_dir,
         top_k=args.top_k,
