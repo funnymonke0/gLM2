@@ -2,23 +2,15 @@
   "mode": "benchmark",
   "index": {
     "mode": "index",
-    "model_name": "tattabio/gLM2_650M_embed",
-    "device": "cuda",
-    "dtype": "torch.bfloat16",
-    "qdrant_url": "http://localhost:6333",
-    "corpus_source": "stream",
+    "skipped": true,
     "collection_name": "gaia_omg_test_run",
-    "record_count": 10,
-    "vector_size": 512,
-    "corpus_inputs": [
-      "hf://tattabio/OG_prot90/train"
-    ],
-    "excluded_ids": [
-      "Query"
-    ],
+    "qdrant_url": "http://localhost:6333",
+    "reason": "Skipped by --skip-index; using existing collection contents."
+  },
+  "controls": {
     "load_metrics": {
       "stage": "model_load",
-      "seconds": 2.0214074999967124,
+      "seconds": 5.314574300078675,
       "cuda_peak_allocated_bytes": 651629056,
       "cuda_peak_reserved_bytes": 736100352,
       "items": null,
@@ -28,58 +20,23 @@
     "embed_metrics": [
       {
         "stage": "embed_batch",
-        "seconds": 2.3891131000127643,
-        "cuda_peak_allocated_bytes": 2017153024,
-        "cuda_peak_reserved_bytes": 2218786816,
-        "items": 10,
-        "cuda_peak_allocated_mib": 1923.71,
-        "cuda_peak_reserved_mib": 2116.0
+        "seconds": 1.786276799859479,
+        "cuda_peak_allocated_bytes": 870484992,
+        "cuda_peak_reserved_bytes": 987758592,
+        "items": 4,
+        "cuda_peak_allocated_mib": 830.16,
+        "cuda_peak_reserved_mib": 942.0
       }
     ],
     "upsert_metrics": [
       {
         "stage": "qdrant_upsert_batch",
-        "seconds": 0.018275100010214373,
-        "cuda_peak_allocated_bytes": 661541376,
-        "cuda_peak_reserved_bytes": 2218786816,
-        "items": 10,
-        "cuda_peak_allocated_mib": 630.9,
-        "cuda_peak_reserved_mib": 2116.0
-      }
-    ],
-    "index_batch_log": null,
-    "summary_path": "C:\\Users\\slice\\OneDrive\\Documents\\GitHub\\gLM2\\artifacts\\metrics\\index_summary.json"
-  },
-  "controls": {
-    "load_metrics": {
-      "stage": "model_load",
-      "seconds": 1.4636863000050653,
-      "cuda_peak_allocated_bytes": 1318806528,
-      "cuda_peak_reserved_bytes": 2218786816,
-      "items": null,
-      "cuda_peak_allocated_mib": 1257.71,
-      "cuda_peak_reserved_mib": 2116.0
-    },
-    "embed_metrics": [
-      {
-        "stage": "embed_batch",
-        "seconds": 0.028748100012307987,
-        "cuda_peak_allocated_bytes": 1528317440,
-        "cuda_peak_reserved_bytes": 2220883968,
+        "seconds": 0.03675700002349913,
+        "cuda_peak_allocated_bytes": 661223936,
+        "cuda_peak_reserved_bytes": 987758592,
         "items": 4,
-        "cuda_peak_allocated_mib": 1457.52,
-        "cuda_peak_reserved_mib": 2118.0
-      }
-    ],
-    "upsert_metrics": [
-      {
-        "stage": "qdrant_upsert_batch",
-        "seconds": 0.012090700009139255,
-        "cuda_peak_allocated_bytes": 1319625728,
-        "cuda_peak_reserved_bytes": 2220883968,
-        "items": 4,
-        "cuda_peak_allocated_mib": 1258.49,
-        "cuda_peak_reserved_mib": 2118.0
+        "cuda_peak_allocated_mib": 630.59,
+        "cuda_peak_reserved_mib": 942.0
       }
     ],
     "ranked_ids": [
@@ -99,35 +56,35 @@
     "query_inputs": [
       "C:\\Users\\slice\\OneDrive\\Documents\\GitHub\\gLM2\\P02981.fasta"
     ],
-    "top_k": 3,
+    "top_k": 10,
     "load_metrics": {
       "stage": "model_load",
-      "seconds": 1.3591896000143606,
-      "cuda_peak_allocated_bytes": 1318806528,
-      "cuda_peak_reserved_bytes": 2229272576,
+      "seconds": 4.357422900153324,
+      "cuda_peak_allocated_bytes": 1312852992,
+      "cuda_peak_reserved_bytes": 1478492160,
       "items": null,
-      "cuda_peak_allocated_mib": 1257.71,
-      "cuda_peak_reserved_mib": 2126.0
+      "cuda_peak_allocated_mib": 1252.03,
+      "cuda_peak_reserved_mib": 1410.0
     },
     "embed_metrics": [
       {
         "stage": "embed_batch",
-        "seconds": 0.025497599999653175,
-        "cuda_peak_allocated_bytes": 1373591040,
-        "cuda_peak_reserved_bytes": 2229272576,
+        "seconds": 0.041010000044479966,
+        "cuda_peak_allocated_bytes": 1367112704,
+        "cuda_peak_reserved_bytes": 1535115264,
         "items": 1,
-        "cuda_peak_allocated_mib": 1309.96,
-        "cuda_peak_reserved_mib": 2126.0
+        "cuda_peak_allocated_mib": 1303.78,
+        "cuda_peak_reserved_mib": 1464.0
       }
     ],
     "query_metrics": {
       "stage": "qdrant_query",
-      "seconds": 0.007285400002729148,
-      "cuda_peak_allocated_bytes": 1319625728,
-      "cuda_peak_reserved_bytes": 2229272576,
+      "seconds": 0.07809370011091232,
+      "cuda_peak_allocated_bytes": 1313672192,
+      "cuda_peak_reserved_bytes": 1535115264,
       "items": 1,
-      "cuda_peak_allocated_mib": 1258.49,
-      "cuda_peak_reserved_mib": 2126.0
+      "cuda_peak_allocated_mib": 1252.82,
+      "cuda_peak_reserved_mib": 1464.0
     },
     "results": [
       {
@@ -135,33 +92,106 @@
         "query_length": 396,
         "hits": [
           {
-            "seq_id": "2961237444|Ga0149631_01|CDS|2961237581|+|136646:138682",
-            "description": "2961237444|Ga0149631_01|CDS|2961237581|+|136646:138682",
-            "score": 0.6706931,
-            "sequence_identity_to_query": 0.045723,
+            "seq_id": "2919171160|Ga0454434_01|CDS|2919171410|-|254304:255497",
+            "description": "2919171160|Ga0454434_01|CDS|2919171410|-|254304:255497",
+            "score": 0.99376595,
+            "sequence_identity_to_query": 0.09068,
+            "sequence_fingerprint": "5db8f2ca6ce7947e5c40ef10294d8852f379fae7",
+            "sequence": "MNRSLVVIFTAIVLDAVGIGLIFPILPALLRDVTHAEDVAPYIGTMTALYAVMQFIFAPVLGALSDRLGRRPVLLISLGGAAINYVFLASATSLWMLLIGRAIAGLTSANVSVATAYITDISPEDKRARRFGLFNAMFGLGFIIGPVLGGVLGDYWLRLPFIAAASLNAGNLMLAFWMLPESREPSREKIDLSALNPLRPLRWVFSVKSVLPVIFIFFIFSATGEAYGTCWALWGGDAFQWNGLWIGLSLGTFGICQTVAQAFLPAPAVKLLGERAAILTGIAGVCIALTVMAFATQSWMIFAVMPVFALGGIGVPALQSLATRQVDESRQGQFQGVLASAVSLASIVGPLAFSSIYFVVRDEWPGAIWLSVVAVYAASIPLVLGLRLEKPAAVVTA",
             "source_path": "hf://tattabio/OG_prot90/train"
           },
           {
-            "seq_id": "2961237444|Ga0149631_01|CDS|2961238271|+|842570:843874",
-            "description": "2961237444|Ga0149631_01|CDS|2961238271|+|842570:843874",
-            "score": 0.5542412,
-            "sequence_identity_to_query": 0.057604,
+            "seq_id": "2837671152|Ga0396780_04|CDS|2837673307|+|478459:479655",
+            "description": "2837671152|Ga0396780_04|CDS|2837673307|+|478459:479655",
+            "score": 0.9903935,
+            "sequence_identity_to_query": 0.135678,
+            "sequence_fingerprint": "cf24a6d0c4069d42e5c17045e27f217056a9fcec",
+            "sequence": "MLIVITMLNVAGMTVVLPVLPFVVLRYIDNADHLAVWVGVLETVNALCAFLVAPFLGALSDRIGRRPVIITAAFGASIGYLTFGIGGAIWVLLLGRIIQGITAGDMPALFAYVADITPADKRAKRFGLLGALTGISFMIGPAAGGLLAAIDVNLPVFVTAAIAAVVAVLSIFLLPESLPPERRTRSLHLPHLHPFKVLKDAYTRPQLRWVLLGFTLVAIPFMFFANNFAVLALDSVMWNATQIGLVVAGVGIVDIIVQGGLLGILLPRIGERGVVIAGIAAQGFGCVALAIVGSVFDSPVLVIVGALVLAAGQGGANAALQGLLSTAVGDDEQGWLAGAVSAIQSASGMIAPLLAGFLYTGIAHSAPYWLGAAMFVVAGALLMRAKLSSPSKLVAPTS",
             "source_path": "hf://tattabio/OG_prot90/train"
           },
           {
-            "seq_id": "2961237444|Ga0149631_01|CDS|2961237846|-|420513:421148",
-            "description": "2961237444|Ga0149631_01|CDS|2961237846|-|420513:421148",
-            "score": 0.5451531,
-            "sequence_identity_to_query": 0.037879,
+            "seq_id": "637000135|NC_008358|CDS|638143065|-|484964:486217",
+            "description": "637000135|NC_008358|CDS|638143065|-|484964:486217",
+            "score": 0.988901,
+            "sequence_identity_to_query": 0.074341,
+            "sequence_fingerprint": "70d5b833a0548eec359749de19ab4f8e9d4b4ad9",
+            "sequence": "MTDTAPARLPGKNAFFFVLVTVFIDHLAFGLIIPVLPTLIQDLANVPASGATLWIGGLAATYAVMTFLFGPLIGALSDKFGRRPVLLVSMAMLGLDFLLMALAPNIWILFLGRALAGISGATYSTANAYIADTTTPEERGRAFGFIGASFGLGFIFGPVIGGLLGELGPRIPFFAAVGLAFLNFLYGVFVLPESLPKARRRNLNLKRANPLGAARHFSKLPKVSWFLIASGIFFLAHTVFPATWSVHGEIRYDWSPMQIGLSLGLVGVGAATVQAGLMGFILKRLGSVRTIMFGYCVTIIAMTGFAFAGQPLFAYLIIPFSALGGVTMPAANALMSSLTPPDAQGELQGAASSLNALGMIIGPLIMSGALFSFSREDAPLQFGGAAFLLAAILTALAFLPFLRGVAANRDVLPAAAP",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "2824026448|Ga0376102_168|CDS|2824027810|-|6846:8117",
+            "description": "2824026448|Ga0376102_168|CDS|2824027810|-|6846:8117",
+            "score": 0.9883801,
+            "sequence_identity_to_query": 0.066194,
+            "sequence_fingerprint": "10d68c26349a64725d2c1a943df49c8595ef2e51",
+            "sequence": "MNLSKAPFRLFSARSARTAAMPFIMLTTLLDMIAIGLMIPVLPALVGSFTGTQADQAFWYGMVTFSFSLANFFASPVLGALSDRYGRRPVLLMGFCGLALSFFATALATAVWMLLAVRLVSGAMQSNLSVANAYVADITPPEQRAKRFGMLGAMFGVGFILGPVMGGLLGAIDLRLPFFAAGSLALLNLLYGYFVLPESLPPERRHRVHWSAANPVASLRGLAQLQGAGRLVAVIACSGLAQFVLYTSWVLYATFKFGWGPRENGWSLAAVGVVSAITQGLLLGRLLKRFSPQRLAVIGMISSMLAYAAWGAATQGWMMFAIIFLNFLSATVSASIQSIISGAADARSQGKTLGAVSGLNSLMAVIAPMLSAPLLVMVSHLPPGDWRIGAPMYFCALLQAAALWLAVSHFRRQRSERRADAAV",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "2919247522|Ga0454504_07|CDS|2919250611|+|252864:254114",
+            "description": "2919247522|Ga0454504_07|CDS|2919250611|+|252864:254114",
+            "score": 0.98678166,
+            "sequence_identity_to_query": 0.074519,
+            "sequence_fingerprint": "22ea1178c4a655354c257cd16cc50e0825e8225d",
+            "sequence": "MKDEKSVRRGLALVFMIMFLDVIGIAIIVPVLPTYLEQLTGDDIGTAAVDGGWLLLVYSAMQFLFAPLIGNLSDRFGRRPVLLVSVFTFAIDNLICALATSFWMLFVGRVLAGISGASFGTGAAYIADVSTDETRAKNFGLIGIAFGTGFALGPVIGGFLGEFGPRVPFFGAAALAFLNFAIAWALLPESLEAKHRRRFEFARANPLGALQQMRNYPGILGVLLVFFLYWLAHSVYPAVWAFVGAYRYGWSEGQIGLSLGIFGIGAALVMAFVLPRVVPVLGEWRTAVLGLSFSVLGLAGYAAAWQGWMVYAVILLTTIENLADPPLRSIAAAKVPPSAQGELQGALSSLSSITTIAGALIFTQTFGYFTGPDAPVSFAGAPYALAAVILLSGVAVFVLKVRGQPSEGAKAAEVTT",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "2830721739|Ga0393913_055|CDS|2830722036|-|1199:2467",
+            "description": "2830721739|Ga0393913_055|CDS|2830722036|-|1199:2467",
+            "score": 0.98562425,
+            "sequence_identity_to_query": 0.080569,
+            "sequence_fingerprint": "55e98b87c376f09ca4eb698a5fea5b27d0bf0a2e",
+            "sequence": "MPLKRNPLFVIYLTMFIDLLGIGILVPVIPQLLGNPDSPQYLLPQGMSLEMGYIILGALVACYPIAQFFASPILGQLSDRYGRRPILMASVTGTAIGYVLFAIGVHTGNLPLLFFSRILDGITGGNLPVAQATIADVTTPENRARNFGRMGAIFGLGFIMGPYIGGQLADSSIVPWFDAATPFWFAAILSTFNAISISLLLQETHPQRSTAALQWGRSLKHIVRAFTMEKLRWFFLVEFLFHGGAGFMVTFFGVYLITRYGFDESGIGNLFAYIGIWIAFTQGVLTPLVHKKWKERSVLSVTFLGTAVTLLLFLLPGPWTVLLFVVPIFAMFNGLTQANVMAYLSRSVGPDVQGEILGINASVSALSQAIPPVLSGIIAAKTSPSMTIVVASVLMIIASLLFMRFVRFDPSHPVDAKAIAGH",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "637000135|NC_008358|CDS|638145813|+|3420990:3422183",
+            "description": "637000135|NC_008358|CDS|638145813|+|3420990:3422183",
+            "score": 0.9854053,
+            "sequence_identity_to_query": 0.108312,
+            "sequence_fingerprint": "8720b42c6503224e7514ff86706a5b956d572c68",
+            "sequence": "MLMVGTVAVAAGMSINFVVVTPLTRKAGLSEMEVAGFMTLSTIIFAVMIPVWGRIADLVGRKRVMIFSLFATALTNMAFLFTLEAGLAGILTGASLLLTLTFVRAWFGLLAPGLQPAAMAAMTDATVPTNRAAGLGMIGAAMAIGSIIGPAGAAVLAPFGALAPLWGTIVFCVLVGFLIAFTLPRTVKRARNAPRPRPLSLTDTRMRPHLLFLLIYFIAIGMMQQTLAWFIEDRYRLTETLGEDAGKAAVLYTGITFACYAVASLIVQFGYINRVKPDPRKVLPIGLAMVAGGYLAADLFYELYVVYACFFVVGAGAALAIPSANALGSLSVSREEQGAAAALLAVAPPSGFIFGPMIGAWLYGVNHALPLLGAATMVGALAVYAVLVTARRPLTPG",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "637000135|NC_008358|CDS|638145814|+|3422336:3423523",
+            "description": "637000135|NC_008358|CDS|638145814|+|3422336:3423523",
+            "score": 0.98429143,
+            "sequence_identity_to_query": 0.133838,
+            "sequence_fingerprint": "037c0f57fd91fd594323564106ccea72d4754f17",
+            "sequence": "MLATIAMGAGMSINFVVVAPLTRKAGLGEVEVAAILTLSTLLYAVMIPRWGRIADRVGRKRVMVFSLIAMGVTNMAFLFALEAGLAGVITGTSLMLTLIFVRLWFGLLTPGLQPASMAAMTDATTIRDRAAGLGMLGAGMSIGSILGPAGAAALAPFGALAPLWGTIVFCILIGILLGFSLPRTVKRPRNAARPKPLSMFDARVRPHLLFLLSYFIGVGMVQQTLGWFIEDRYALAGDDPAAVGQTAVLYTGIVFSCMAVSTIAVQFGYISRLKPDPRKILWVGLALVAVGYTAADVFHAFPVLCAAFLLIGAGSALAIPSANALGSLSVSREEQGAAAALMSAAPPAGFIFGPLMGAGLYQVNHALPLIASAVLVGSLAVYAMLVTARRPLAEG",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "2816332447|Ga0268223_1065|CDS|2817926428|-|3056:4309",
+            "description": "2816332447|Ga0268223_1065|CDS|2817926428|-|3056:4309",
+            "score": 0.9835926,
+            "sequence_identity_to_query": 0.098321,
+            "sequence_fingerprint": "0b687deceb93a600e404d50099bbccc3bd015cb0",
+            "sequence": "MKKPSALIIFLTVFIDLIGFGIVLPLIPLFSDGFGANGFLVGVIMASFSAMQFLFAPLWGRMSDRIGRRPVILIGLCGSTISYAIFAIACGLQGESKELALWVILGSRMLAGVMGANVSVAQAYMADVSPPEKRSKSMGLIGMAFGLGFVFGPFIGALGLAQFGMTGPGWVATGFCGFAFLFAVMKLQESRKPDSDAAPQRPHFQQIKKVLGTPQVGLLIGLFFLATFCFTTFETTLGLLVQNNFGLDKENPQDAKTIGYLFGFAGLVGAMVQGGMIGRLVKKYGEPKLIVMSLVLTGISLAPLPFAKTWTWLLIALGGLAIGSSLTRPPIFGMISMLSPKDEQGATIGVAQSAGSFARIFGPIFAGTCFELRQELPYLICGAVAVLAALIAVAKLGGAGPAVDAPTGTDSRKPSEA",
+            "source_path": "hf://tattabio/OG_prot90/train"
+          },
+          {
+            "seq_id": "2716884267|Ga0171954_106|CDS|2717154496|-|18140:19393",
+            "description": "2716884267|Ga0171954_106|CDS|2717154496|-|18140:19393",
+            "score": 0.98245305,
+            "sequence_identity_to_query": 0.069544,
+            "sequence_fingerprint": "595f3b5dcd066b59873f0fb9c5f847a6c1f366dc",
+            "sequence": "MQKNHKIMPTQLCAFFTLLDDRLGESFVFPLLPFLLERFTSSGITLALLSGSYALAQFTVAPLIGSLSDRFGRKPILQFCTAGSIIALSLFGITLSLNWNSFLPSWASLLPLILLFFARIIDGLSGGTAATATAVLADISTPENRARSFGLIGLAFGLGFAIGPPLGGKLAEINPTLTVIPASTFAFINLALVTWILPETLSQKDRIKLPKKRSLNPFSQLYKLFSNPLLQKPCLGFFLFFMAFNGFTTILVLYLKESFAWTSTLSGWVFAVVGIVAMIVQGGLIGPLVKKFGELKLTTTGLGLLTVGSLLITIANSETSIPIVFFASILLAIGTGLVTPCLRSLISRKIQSSSQGTLLGGLQGLQSLGTFVGGGIAGFAYDKINPTSPFIGGAIMLMIVIFLLQGIPQSKAVKITN",
             "source_path": "hf://tattabio/OG_prot90/train"
           }
         ],
-        "expected_top_1": "2848905985|Ga0398538_01|CDS|2848909876|reverse|4081006:4082196",
-        "actual_top_1": "2961237444|Ga0149631_01|CDS|2961237581|+|136646:138682",
+        "expected_top_1_id": "2848905985|Ga0398538_01|CDS|2848909876|reverse|4081006:4082196",
+        "actual_top_1_id": "2919171160|Ga0454434_01|CDS|2919171410|-|254304:255497",
+        "top_1_matches_reference_by_id": false,
+        "expected_top_1": "1a9fc4a0d64d9d90a319eca0a2cd9cd7808bea06",
+        "actual_top_1": "5db8f2ca6ce7947e5c40ef10294d8852f379fae7",
         "top_1_matches_reference": false,
         "overlap_at_5": 0,
         "overlap_at_10": 0,
-        "reference_rank_of_actual_top_1": null
+        "overlap_at_k": 0,
+        "reference_rank_of_actual_top_1": 94
       }
     ],
     "summary_path": "C:\\Users\\slice\\OneDrive\\Documents\\GitHub\\gLM2\\artifacts\\metrics\\query_summary.json"

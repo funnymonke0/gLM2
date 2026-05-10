@@ -31,4 +31,6 @@ def print_benchmark_summary(report: dict) -> None:
     if "top_1_matches_reference" in top_result:
         print(f"Matches SeqHub reference top-1: {top_result['top_1_matches_reference']}")
         print(f"Overlap@5: {top_result['overlap_at_5']}, Overlap@10: {top_result['overlap_at_10']}")
+        if "overlap_at_k" in top_result:
+            print(f"Overlap@k: {top_result['overlap_at_k']}")
     print(f"Metrics: {report['summary_path']}")

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 DEFAULT_MODEL_NAME = "tattabio/gLM2_650M_embed"
-DEFAULT_COLLECTION_NAME = "seqhub_local"
+DEFAULT_COLLECTION_NAME = "gaia_omg_test_run"
 DEFAULT_QDRANT_URL = "http://localhost:6333"
 DEFAULT_METRICS_DIR = Path("artifacts") / "metrics"
 DEFAULT_INDEX_BATCH_LOG = "index_batches.jsonl"

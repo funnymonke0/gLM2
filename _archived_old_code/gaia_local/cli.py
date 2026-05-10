@@ -31,13 +31,21 @@ def parse_args() -> argparse.Namespace: #so it goes seqhub_local.py command --ar
     benchmark_parser.add_argument("--query-fasta", type=Path, nargs="+", required=True, help="One or more FASTA files containing query proteins.")
     benchmark_parser.add_argument("--expected-fasta", type=Path, required=True, help="SeqHub reference FASTA to compare against.")
     benchmark_parser.add_argument("--top-k", type=int, default=10)
+    benchmark_parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        help="Skip indexing and run benchmark query/controls against the existing Qdrant collection.",
+    )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if hasattr(args, "stream_mode"):
+        args.streaming = args.stream_mode == "stream"
+    return args
 
 
 def add_shared_runtime_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=32, help="Number of sequences to embed and upsert in each batch.")
     parser.add_argument("--no-auto-batch-size", dest="auto_batch_size", action="store_false", help="Disable automatic batch-size backoff on OOM.")
     parser.set_defaults(auto_batch_size=True)
     parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH)
@@ -50,7 +58,12 @@ def add_shared_index_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--corpus", type=Path, nargs="*", help="One or more FASTA files or directories to index when --corpus-source=fasta.")
     parser.add_argument("--stream-split", default="train", help="stream split to load when --corpus-source=stream.")
     parser.add_argument("--stream-limit", type=int, default=200, help="Maximum stream records to load (use 0 or negative for no limit).")
-    parser.add_argument("--no-streaming", dest="streaming", action="store_false", help="Disable stream streaming mode.")
+    parser.add_argument(
+        "--stream-mode",
+        choices=["stream", "download"],
+        default="stream",
+        help="When --corpus-source=stream: choose streaming reads or fully downloaded dataset iteration.",
+    )
     parser.set_defaults(streaming=True)
     parser.add_argument("--collection-name", default=DEFAULT_COLLECTION_NAME)
     parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL, help="Docker-hosted Qdrant URL, typically http://localhost:6333.")

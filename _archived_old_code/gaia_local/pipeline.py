@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 from pathlib import Path
 from typing import Sequence
 
@@ -14,9 +15,16 @@ from gaia_local.controls import make_control_records, sequence_identity
 from gaia_local.embedder import GLM2Embedder
 from gaia_local.fasta_io import load_fasta_records, resolve_fasta_inputs
 from gaia_local.metrics import stage_metrics_dict, timed_stage, write_json
-from gaia_local.omg_io import iter_stream_record_batches, load_stream_records
+from gaia_local.omg_io import iter_stream_record_batches
 from gaia_local.qdrant_store import create_qdrant_client, ensure_collection, recreate_collection, upsert_records
 from gaia_local.types import SequenceRecord
+
+
+def _sequence_fingerprint(sequence: str) -> str:
+    normalized = "".join(ch for ch in sequence.upper() if "A" <= ch <= "Z")
+    if not normalized:
+        return ""
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
 
 def index_corpus(
@@ -60,7 +68,7 @@ def index_corpus(
     if batch_log_path is not None and batch_log_path.exists():
         batch_log_path.unlink()
 
-    if corpus_source == "stream" and streaming:
+    if corpus_source == "stream":
         embed_metrics = []
         upsert_metrics = []
         record_count = 0
@@ -96,8 +104,6 @@ def index_corpus(
         if record_count == 0 or vector_size is None:
             raise ValueError(f"No stream records were loaded for split '{stream_split}'.")
     else:
-        if corpus_source == "stream":
-            records = load_stream_records(split=stream_split, limit=normalized_limit, streaming=streaming)
         embeddings, embed_metrics = embedder.embed_records(records, batch_log_path=batch_log_path)
         ensure_collection(client, collection_name, embeddings.shape[1], recreate=recreate)
         upsert_metrics = upsert_records(client, collection_name, records, embeddings, batch_size=batch_size)
@@ -163,6 +169,8 @@ def query_collection(
                     "description": payload.get("description"),
                     "score": point.score,
                     "sequence_identity_to_query": round(sequence_identity(record.sequence, sequence), 6),
+                    "sequence_fingerprint": _sequence_fingerprint(sequence),
+                    "sequence": sequence,
                     "source_path": payload.get("source_path"),
                 }
             )
@@ -192,14 +200,31 @@ def query_collection(
     if expected_fasta is not None:
         expected_records = load_fasta_records([expected_fasta], excluded_ids={"Query"})
         expected_ids = [record.seq_id for record in expected_records]
+        expected_fingerprints = [_sequence_fingerprint(record.sequence) for record in expected_records]
         for result in report["results"]:
             actual_ids = [hit["seq_id"] for hit in result["hits"]]
-            result["expected_top_1"] = expected_ids[0] if expected_ids else None
-            result["actual_top_1"] = actual_ids[0] if actual_ids else None
-            result["top_1_matches_reference"] = bool(expected_ids and actual_ids and actual_ids[0] == expected_ids[0])
-            result["overlap_at_5"] = len(set(actual_ids[:5]) & set(expected_ids[:5]))
-            result["overlap_at_10"] = len(set(actual_ids[:10]) & set(expected_ids[:10]))
-            result["reference_rank_of_actual_top_1"] = expected_ids.index(actual_ids[0]) + 1 if actual_ids and actual_ids[0] in expected_ids else None
+            actual_fingerprints = [hit.get("sequence_fingerprint", "") for hit in result["hits"]]
+
+            # Preserve ID-based fields for debugging mixed-id namespaces.
+            result["expected_top_1_id"] = expected_ids[0] if expected_ids else None
+            result["actual_top_1_id"] = actual_ids[0] if actual_ids else None
+            result["top_1_matches_reference_by_id"] = bool(expected_ids and actual_ids and actual_ids[0] == expected_ids[0])
+
+            # Primary comparison: sequence-based so cross-namespace references still resolve.
+            result["expected_top_1"] = expected_fingerprints[0] if expected_fingerprints else None
+            result["actual_top_1"] = actual_fingerprints[0] if actual_fingerprints else None
+            result["top_1_matches_reference"] = bool(
+                expected_fingerprints and actual_fingerprints and actual_fingerprints[0] == expected_fingerprints[0]
+            )
+            result["overlap_at_5"] = len(set(actual_fingerprints[:5]) & set(expected_fingerprints[:5]))
+            result["overlap_at_10"] = len(set(actual_fingerprints[:10]) & set(expected_fingerprints[:10]))
+            k = min(top_k, len(actual_fingerprints), len(expected_fingerprints))
+            result["overlap_at_k"] = len(set(actual_fingerprints[:k]) & set(expected_fingerprints[:k])) if k > 0 else 0
+            result["reference_rank_of_actual_top_1"] = (
+                expected_fingerprints.index(actual_fingerprints[0]) + 1
+                if actual_fingerprints and actual_fingerprints[0] in expected_fingerprints
+                else None
+            )
     summary_path = output_json or (metrics_dir / DEFAULT_QUERY_SUMMARY)
     write_json(summary_path, report)
     report["summary_path"] = str(summary_path.resolve())
@@ -239,24 +264,33 @@ def validate_controls(
 
 
 def run_benchmark(args: argparse.Namespace) -> dict:
-    index_report = index_corpus(
-        corpus_paths=args.corpus,
-        corpus_source=args.corpus_source,
-        stream_split=args.stream_split,
-        stream_limit=args.stream_limit,
-        streaming=args.streaming,
-        batch_log=args.batch_log,
-        model_name=args.model_name,
-        collection_name=args.collection_name,
-        qdrant_url=args.qdrant_url,
-        batch_size=args.batch_size,
-        auto_batch_size=args.auto_batch_size,
-        max_seq_length=args.max_seq_length,
-        metrics_dir=args.metrics_dir,
-        recreate=args.recreate,
-        excluded_ids=set(args.exclude_header),
-        output_json=args.metrics_dir / DEFAULT_INDEX_SUMMARY,
-    )
+    if args.skip_index:
+        index_report = {
+            "mode": "index",
+            "skipped": True,
+            "collection_name": args.collection_name,
+            "qdrant_url": args.qdrant_url,
+            "reason": "Skipped by --skip-index; using existing collection contents.",
+        }
+    else:
+        index_report = index_corpus(
+            corpus_paths=args.corpus,
+            corpus_source=args.corpus_source,
+            stream_split=args.stream_split,
+            stream_limit=args.stream_limit,
+            streaming=args.streaming,
+            batch_log=args.batch_log,
+            model_name=args.model_name,
+            collection_name=args.collection_name,
+            qdrant_url=args.qdrant_url,
+            batch_size=args.batch_size,
+            auto_batch_size=args.auto_batch_size,
+            max_seq_length=args.max_seq_length,
+            metrics_dir=args.metrics_dir,
+            recreate=args.recreate,
+            excluded_ids=set(args.exclude_header),
+            output_json=args.metrics_dir / DEFAULT_INDEX_SUMMARY,
+        )
     query_records = load_fasta_records(args.query_fasta)
     controls_report = validate_controls(
         query_record=query_records[0],
