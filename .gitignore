@@ -166,3 +166,6 @@ datasets/plasmid.genomic.gbff/plasmid.genomic.gbff
 
 ref_seq_plasmids.csv
 ecnoec.pem
+og90_corpus_full.dmnd
+*.dmnd
+og90_corpus_50k.fasta

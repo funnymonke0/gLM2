@@ -6,10 +6,14 @@ Index OG_prot90 corpus from HuggingFace, query with GLM2, validate against refer
 
 import argparse
 import json
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Sequence, Optional
 import hashlib
+import time
 
 import numpy as np
 import torch
@@ -38,8 +42,9 @@ class GLM2Embedder:
         self.batch_size = batch_size
         self.max_length = max_length
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        
-        # Load with 4-bit quantization to reduce memory usage
+
+        # 4-bit (bitsandbytes nf4) keeps weights at 4× less bandwidth than fp16
+        # on this memory-bound GPU class (GDDR6), which outweighs dequant cost.
         if use_4bit and torch.cuda.is_available():
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
@@ -55,8 +60,29 @@ class GLM2Embedder:
             )
         else:
             self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(self.device)
-        
+
         self.model.eval()
+
+    @staticmethod
+    def _safe_empty_cuda_cache() -> None:
+        """Best-effort CUDA cache cleanup that tolerates allocator failures."""
+        if not torch.cuda.is_available():
+            return
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            # If CUDA is in an error state after OOM, cache cleanup can fail too.
+            pass
+
+    @staticmethod
+    def _is_oom_error(exc: BaseException) -> bool:
+        """Detect CUDA OOM and related accelerator allocation failures."""
+        text = str(exc).lower()
+        return (
+            "out of memory" in text
+            or "cuda error" in text and "memory" in text
+            or "cudaerrormemoryallocation" in text
+        )
 
     def embed_batch(self, sequences: Sequence[str]) -> np.ndarray:
         """Embed a batch of sequences."""
@@ -99,11 +125,11 @@ class GLM2Embedder:
                 batch_emb = self.embed_batch(batch)
                 embeddings.append(batch_emb)
                 position += len(batch)
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower() and effective_batch_size > 1:
+            except (RuntimeError, torch.AcceleratorError) as e:
+                if self._is_oom_error(e) and effective_batch_size > 1:
                     effective_batch_size = max(1, effective_batch_size // 2)
                     print(f"  OOM at batch {effective_batch_size * 2}. Retrying with {effective_batch_size}.")
-                    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                    self._safe_empty_cuda_cache()
                 else:
                     raise
         
@@ -127,7 +153,7 @@ def load_fasta(path: Path, max_seq_length: int = 0) -> list[SequenceRecord]:
     return records
 
 
-def load_hf_dataset(split: str = "train", limit: Optional[int] = None, streaming: bool = True) -> list[SequenceRecord]:
+def load_hf_dataset(split: str = "train", limit: Optional[int] = None, streaming: bool = False) -> list[SequenceRecord]:
     """Load OG_prot90 dataset from HuggingFace."""
     print(f"Loading OG_prot90 dataset (split={split}, streaming={streaming}, limit={limit})...")
     ds = datasets.load_dataset("tattabio/OG_prot90", split=split, streaming=streaming)
@@ -154,6 +180,51 @@ def load_hf_dataset(split: str = "train", limit: Optional[int] = None, streaming
     return records
 
 
+def iter_hf_dataset_chunks(
+    split: str = "train",
+    limit: Optional[int] = None,
+    chunk_size: int = 2000,
+    streaming: bool = False,
+):
+    """Yield OG_prot90 sequences in bounded chunks to avoid large-memory spikes."""
+    print(
+        f"Loading OG_prot90 dataset in chunks "
+        f"(split={split}, streaming={streaming}, limit={limit}, chunk_size={chunk_size})..."
+    )
+    ds = datasets.load_dataset("tattabio/OG_prot90", split=split, streaming=streaming)
+
+    chunk: list[SequenceRecord] = []
+    total = 0
+    for idx, row in enumerate(ds):
+        if limit is not None and total >= limit:
+            break
+
+        sequence_value = row.get("sequence")
+        if not sequence_value:
+            continue
+
+        seq = str(sequence_value).strip().upper()
+        if not seq:
+            continue
+
+        chunk.append(
+            SequenceRecord(
+                seq_id=str(row.get("id") or f"hf_og90_{idx}"),
+                description=str(row.get("id") or f"hf_og90_{idx}"),
+                sequence=seq,
+                source="hf://tattabio/OG_prot90/train",
+            )
+        )
+        total += 1
+
+        if len(chunk) >= chunk_size:
+            yield chunk
+            chunk = []
+
+    if chunk:
+        yield chunk
+
+
 def sequence_fingerprint(sequence: str) -> str:
     """Compute sequence fingerprint for validation."""
     normalized = "".join(ch for ch in sequence.upper() if "A" <= ch <= "Z")
@@ -162,14 +233,43 @@ def sequence_fingerprint(sequence: str) -> str:
     return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
 
+def _l2_normalize_rows(x: np.ndarray) -> np.ndarray:
+    """L2-normalize each row vector for cosine similarity via dot-product."""
+    if x.size == 0:
+        return x
+    norms = np.linalg.norm(x, axis=1, keepdims=True)
+    norms = np.clip(norms, 1e-12, None)
+    return x / norms
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """Best-effort detection for HTTP timeout errors from Qdrant/httpx/httpcore."""
+    keywords = ("timed out", "readtimeout", "timeout")
+    current: Optional[BaseException] = exc
+    for _ in range(6):
+        if current is None:
+            break
+        text = str(current).lower()
+        if any(k in text for k in keywords):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def search_and_validate(
     query_fasta: Path,
     model_name: str = "tattabio/gLM2_650M_embed",
     batch_size: int = 32,
+    max_length: int = 4096,
     top_k: int = 10,
     qdrant_url: str = "http://localhost:6333",
+    qdrant_timeout: int = 300,
+    qdrant_retries: int = 5,
     collection_name: str = "glm2_og90",
     dataset_limit: Optional[int] = None,
+    corpus_chunk_size: int = 2000,
+    upsert_batch_size: int = 100,
+    streaming: bool = False,
     recreate: bool = True,
     expected_fasta: Optional[Path] = None,
 ) -> dict:
@@ -179,7 +279,11 @@ def search_and_validate(
     print(f"\n=== GLM2 Sequence Search ===")
     print(f"Model: {model_name}")
     print(f"Qdrant: {qdrant_url}")
+    print(f"Qdrant timeout: {qdrant_timeout}s")
+    print(f"Qdrant retries: {qdrant_retries}")
     print(f"Collection: {collection_name}")
+    print(f"Max token length: {max_length}")
+    print(f"HF loading mode: {'streaming' if streaming else 'download-first'}")
     
     # Load query sequences
     print(f"\nLoading queries from {query_fasta}...")
@@ -187,63 +291,107 @@ def search_and_validate(
     query_text = [s.sequence for s in query_seqs]
     print(f"Loaded {len(query_seqs)} query sequences")
     
-    # Load corpus from HuggingFace
-    corpus_seqs = load_hf_dataset(limit=dataset_limit)
-    corpus_text = [s.sequence for s in corpus_seqs]
-    
     # Initialize Qdrant
     print(f"\nConnecting to Qdrant at {qdrant_url}...")
-    client = QdrantClient(url=qdrant_url)
+    client = QdrantClient(url=qdrant_url, timeout=int(qdrant_timeout))
+
+    def qdrant_call(operation_name: str, fn):
+        """Retry Qdrant HTTP operations only on timeout failures."""
+        for attempt in range(1, max(1, qdrant_retries) + 1):
+            try:
+                return fn()
+            except Exception as exc:
+                if not is_timeout_error(exc) or attempt >= max(1, qdrant_retries):
+                    raise
+                delay = min(30.0, 1.5 * attempt)
+                print(
+                    f"  Qdrant timeout during {operation_name} "
+                    f"(attempt {attempt}/{qdrant_retries}); retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
     
     # Delete and recreate collection if requested
     if recreate:
         try:
-            client.delete_collection(collection_name)
+            qdrant_call("delete_collection", lambda: client.delete_collection(collection_name))
             print(f"Deleted existing collection '{collection_name}'")
         except Exception:
             pass
     
     # Initialize embedder
     print(f"\nInitializing GLM2 embedder...")
-    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size)
-    
-    # Embed corpus in batches
-    print(f"\nEmbedding {len(corpus_text)} corpus sequences...")
-    corpus_embeddings = embedder.embed_sequences(corpus_text)
-    print(f"Corpus embeddings shape: {corpus_embeddings.shape}")
-    
-    # Create collection
-    if not client.collection_exists(collection_name):
-        vector_size = corpus_embeddings.shape[1]
-        print(f"Creating collection '{collection_name}' with vector size {vector_size}...")
-        client.create_collection(
-            collection_name=collection_name,
-            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
-        )
-    
-    # Upsert corpus into Qdrant
-    print(f"Indexing corpus into Qdrant...")
-    points = []
-    for point_id, (seq, embedding) in enumerate(zip(corpus_seqs, corpus_embeddings)):
-        points.append(
-            PointStruct(
-                id=point_id,
-                vector=embedding.tolist(),
-                payload={
-                    "seq_id": seq.seq_id,
-                    "description": seq.description,
-                    "sequence": seq.sequence,
-                    "source": seq.source,
-                },
+    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size, max_length=max_length)
+
+    # Stream corpus in chunks so large trials do not allocate a full in-memory matrix.
+    print("\nIndexing OG_prot90 corpus into Qdrant in chunks...")
+    total_indexed = 0
+    vector_size = -1
+    chunk_times: list[float] = []
+    import time as _time
+    for chunk_idx, corpus_chunk in enumerate(
+        iter_hf_dataset_chunks(limit=dataset_limit, chunk_size=corpus_chunk_size, streaming=streaming), start=1
+    ):
+        _chunk_t0 = _time.monotonic()
+        chunk_text = [s.sequence for s in corpus_chunk]
+        chunk_embeddings = embedder.embed_sequences(chunk_text)
+        if chunk_embeddings.size == 0:
+            continue
+
+        if vector_size < 0:
+            vector_size = chunk_embeddings.shape[1]
+            if not qdrant_call("collection_exists", lambda: client.collection_exists(collection_name)):
+                print(f"Creating collection '{collection_name}' with vector size {vector_size}...")
+                qdrant_call(
+                    "create_collection",
+                    lambda: client.create_collection(
+                        collection_name=collection_name,
+                        vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE),
+                    ),
+                )
+
+        points = []
+        for i, (seq, embedding) in enumerate(zip(corpus_chunk, chunk_embeddings)):
+            points.append(
+                PointStruct(
+                    id=total_indexed + i,
+                    vector=embedding.tolist(),
+                    payload={
+                        "seq_id": seq.seq_id,
+                        "description": seq.description,
+                        "sequence": seq.sequence,
+                        "source": seq.source,
+                    },
+                )
             )
+
+        for i in range(0, len(points), upsert_batch_size):
+            batch = points[i : i + upsert_batch_size]
+            qdrant_call("upsert", lambda: client.upsert(collection_name=collection_name, points=batch))
+
+        total_indexed += len(points)
+        _chunk_elapsed = _time.monotonic() - _chunk_t0
+        chunk_times.append(_chunk_elapsed)
+        avg_sec = sum(chunk_times) / len(chunk_times)
+        seqs_per_sec = corpus_chunk_size / avg_sec
+        eta_str = ""
+        if dataset_limit:
+            remaining = dataset_limit - total_indexed
+            if remaining > 0:
+                eta_sec = remaining / seqs_per_sec
+                eta_str = f"  ETA {eta_sec/60:.1f} min"
+        print(
+            f"  Chunk {chunk_idx}: indexed {len(points)} (total={total_indexed})"
+            f"  {seqs_per_sec:.1f} seqs/s{eta_str}"
         )
-    
-    # Batch upsert
-    batch_upsert_size = 100
-    for i in range(0, len(points), batch_upsert_size):
-        batch = points[i : i + batch_upsert_size]
-        client.upsert(collection_name=collection_name, points=batch)
-    print(f"Indexed {len(points)} sequences into Qdrant")
+
+        # Encourage early release of memory between large chunks.
+        del chunk_embeddings
+        del points
+        embedder._safe_empty_cuda_cache()
+
+    if total_indexed == 0:
+        raise ValueError("No sequences indexed from OG_prot90")
+    print(f"Indexed {total_indexed} sequences into Qdrant")
     
     # Embed queries
     print(f"\nEmbedding {len(query_text)} query sequences...")
@@ -253,14 +401,18 @@ def search_and_validate(
     print(f"\nQuerying Qdrant for top-{top_k} matches per query...")
     results = []
     for query_idx, (query, embedding) in enumerate(zip(query_seqs, query_embeddings)):
-        response = client.query_points(
-            collection_name=collection_name,
-            query=embedding.tolist(),
-            limit=top_k,
+        response = qdrant_call(
+            "query_points",
+            lambda: client.query_points(
+                collection_name=collection_name,
+                query=embedding.tolist(),
+                limit=top_k,
+            ),
         )
-        
+        points_iter = getattr(response, "points", None) or []
+
         matches = []
-        for rank, point in enumerate(response.points, start=1):
+        for rank, point in enumerate(points_iter, start=1):
             payload = point.payload or {}
             matches.append(
                 {
@@ -285,7 +437,7 @@ def search_and_validate(
         "qdrant_url": qdrant_url,
         "collection_name": collection_name,
         "corpus_source": "hf://tattabio/OG_prot90/train",
-        "corpus_count": len(corpus_seqs),
+        "corpus_count": total_indexed,
         "corpus_limit": dataset_limit,
         "query_file": str(query_fasta),
         "query_count": len(query_seqs),
@@ -320,32 +472,548 @@ def search_and_validate(
     return output
 
 
+def search_local_fasta(
+    query_fasta: Path,
+    corpus_fasta: Path,
+    model_name: str = "tattabio/gLM2_650M_embed",
+    batch_size: int = 32,
+    max_length: int = 4096,
+    top_k: int = 10,
+    expected_fasta: Optional[Path] = None,
+) -> dict:
+    """Minimal local search mode: embed corpus/query FASTA files and rank by cosine similarity."""
+    print(f"\n=== GLM2 Local FASTA Search ===")
+    print(f"Model: {model_name}")
+    print(f"Corpus FASTA: {corpus_fasta}")
+    print(f"Query FASTA: {query_fasta}")
+    print(f"Max token length: {max_length}")
+
+    print(f"\nLoading corpus from {corpus_fasta}...")
+    corpus_records = load_fasta(corpus_fasta)
+    print(f"Loaded {len(corpus_records)} corpus sequences")
+
+    print(f"Loading queries from {query_fasta}...")
+    query_records = load_fasta(query_fasta)
+    print(f"Loaded {len(query_records)} query sequences")
+
+    print(f"\nInitializing GLM2 embedder...")
+    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size, max_length=max_length)
+
+    print(f"Embedding corpus...")
+    corpus_embeddings = embedder.embed_sequences([r.sequence for r in corpus_records]).astype(np.float32)
+    corpus_embeddings = _l2_normalize_rows(corpus_embeddings)
+
+    print(f"Embedding queries...")
+    query_embeddings = embedder.embed_sequences([r.sequence for r in query_records]).astype(np.float32)
+    query_embeddings = _l2_normalize_rows(query_embeddings)
+
+    top_k = max(1, min(top_k, len(corpus_records)))
+    results = []
+    for q_idx, (query, q_emb) in enumerate(zip(query_records, query_embeddings)):
+        scores = corpus_embeddings @ q_emb
+        order = np.argsort(-scores)[:top_k]
+        matches = []
+        for rank, corpus_idx in enumerate(order, start=1):
+            c = corpus_records[int(corpus_idx)]
+            matches.append(
+                {
+                    "rank": rank,
+                    "corpus_id": c.seq_id,
+                    "corpus_description": c.description,
+                    "similarity_score": float(scores[int(corpus_idx)]),
+                    "corpus_sequence": c.sequence,
+                }
+            )
+        results.append(
+            {
+                "query_id": query.seq_id,
+                "query_description": query.description,
+                "query_length": len(query.sequence),
+                "matches": matches,
+            }
+        )
+
+    output = {
+        "mode": "local_fasta_query",
+        "model": model_name,
+        "corpus_source": str(corpus_fasta),
+        "corpus_count": len(corpus_records),
+        "query_file": str(query_fasta),
+        "query_count": len(query_records),
+        "top_k": top_k,
+        "results": results,
+    }
+
+    if expected_fasta:
+        print(f"\nValidating against reference {expected_fasta}...")
+        expected_seqs = load_fasta(expected_fasta)
+        expected_fps = {sequence_fingerprint(s.sequence): s.seq_id for s in expected_seqs}
+
+        validation = []
+        for result in results:
+            actual_fps = [sequence_fingerprint(hit["corpus_sequence"]) for hit in result["matches"]]
+            expected_hit_ids = [expected_fps.get(fp) for fp in actual_fps if fp in expected_fps]
+            validation.append(
+                {
+                    "query_id": result["query_id"],
+                    "top_match_ids": [hit["corpus_id"] for hit in result["matches"][:3]],
+                    "expected_in_top_k": len(expected_hit_ids) > 0,
+                    "matched_ids": expected_hit_ids,
+                }
+            )
+
+        output["validation"] = {
+            "reference_file": str(expected_fasta),
+            "reference_count": len(expected_seqs),
+            "results": validation,
+        }
+
+    return output
+
+
+# ---------------------------------------------------------------------------
+# DIAMOND pre-filter helpers
+# ---------------------------------------------------------------------------
+
+def _find_diamond_binary(diamond_bin: Optional[str] = None) -> str:
+    """Locate the diamond executable: explicit path → bin/ subdir → PATH."""
+    candidates: list[str] = []
+    if diamond_bin:
+        candidates.append(diamond_bin)
+    script_dir = Path(__file__).parent
+    candidates.append(str(script_dir / "bin" / "diamond.exe"))
+    candidates.append(str(script_dir / "bin" / "diamond"))
+    candidates.append("diamond")
+    for c in candidates:
+        if Path(c).exists() or shutil.which(c):
+            return c
+    raise FileNotFoundError(
+        "diamond not found. Pass --diamond-bin or place diamond.exe in bin/."
+    )
+
+
+def _extract_sequences_from_db(
+    db_path: Path,
+    seq_ids: list[str],
+    diamond_bin: str,
+) -> list[SequenceRecord]:
+    """Extract sequences from a DIAMOND database by ID using 'diamond getseq'."""
+    out_fasta = Path(tempfile.mktemp(suffix="_getseq.fasta"))
+    try:
+        cmd = [diamond_bin, "getseq", "--db", str(db_path), "--out", str(out_fasta)]
+        for sid in seq_ids:
+            cmd.extend(["--seq", sid])
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if proc.stderr:
+            for line in proc.stderr.splitlines():
+                print(f"  [getseq] {line}")
+        if proc.returncode != 0:
+            raise RuntimeError(f"diamond getseq failed (exit {proc.returncode}):\n{proc.stdout or '(no output)'}")
+        records: list[SequenceRecord] = []
+        for record in SeqIO.parse(str(out_fasta), "fasta"):
+            seq = str(record.seq).replace("*", "").replace(" ", "").upper()
+            if seq:
+                records.append(SequenceRecord(
+                    seq_id=record.id,
+                    description=record.description,
+                    sequence=seq,
+                    source=str(db_path),
+                ))
+        return records
+    finally:
+        out_fasta.unlink(missing_ok=True)
+
+
+def export_corpus_to_fasta(
+    output_path: Path,
+    limit: Optional[int] = None,
+    streaming: bool = False,
+) -> int:
+    """Write OG_prot90 sequences (from HF cache) to a FASTA file."""
+    print(f"Exporting OG_prot90 corpus to {output_path} ...")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with output_path.open("w") as fh:
+        for chunk in iter_hf_dataset_chunks(limit=limit, chunk_size=5000, streaming=streaming):
+            for rec in chunk:
+                fh.write(f">{rec.seq_id}\n{rec.sequence}\n")
+                count += 1
+            print(f"  {count} sequences written...", end="\r")
+    print(f"  Exported {count} sequences to {output_path}          ")
+    return count
+
+
+def _run_diamond_blastp(
+    query_fasta: Path,
+    corpus_fasta: Path,
+    db_path: Path,
+    output_path: Path,
+    diamond_bin: str,
+    top_n: int = 500,
+    evalue: float = 0.001,
+    sensitivity: str = "sensitive",
+) -> list[tuple[str, str]]:
+    """Build DIAMOND db (if absent) and run blastp. Returns ordered (seq_id, sequence) pairs."""
+    db_file = Path(str(db_path) + ".dmnd")
+
+    def _build_db() -> None:
+        print(f"Building DIAMOND database from {corpus_fasta} ({corpus_fasta.stat().st_size / 1e6:.0f} MB) ...")
+        proc = subprocess.run(
+            [diamond_bin, "makedb", "--in", str(corpus_fasta), "--db", str(db_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        if proc.stderr:
+            for line in proc.stderr.splitlines():
+                print(f"  [makedb] {line}")
+        if proc.returncode != 0:
+            db_file.unlink(missing_ok=True)  # remove partial file
+            raise RuntimeError(f"diamond makedb failed (exit {proc.returncode}):\n{proc.stdout or '(no output)'}")
+        print(f"  Database built: {db_file} ({db_file.stat().st_size / 1e6:.0f} MB)")
+
+    if not db_file.exists():
+        _build_db()
+    else:
+        # Quick sanity-check: try opening the DB; rebuild if it's incomplete
+        probe = subprocess.run(
+            [diamond_bin, "dbinfo", "--db", str(db_path)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        combined = (probe.stdout + probe.stderr).lower()
+        if probe.returncode != 0 or "incomplete" in combined or "error" in combined:
+            print(f"DIAMOND database appears incomplete or corrupt — rebuilding ...")
+            db_file.unlink(missing_ok=True)
+            _build_db()
+        else:
+            print(f"Using existing DIAMOND database: {db_file} ({db_file.stat().st_size / 1e6:.0f} MB)")
+
+    # Print sizes to help diagnose failures on large corpora
+    if corpus_fasta.exists():
+        print(f"  Corpus FASTA : {corpus_fasta.stat().st_size / 1e6:.0f} MB")
+    if db_file.exists():
+        print(f"  DIAMOND DB   : {db_file.stat().st_size / 1e6:.0f} MB")
+
+    print(f"Running DIAMOND blastp (top {top_n} hits, e-value <= {evalue}, {sensitivity} mode) ...")
+    cmd = [
+        diamond_bin, "blastp",
+        "--db", str(db_path),
+        "--query", str(query_fasta),
+        "--out", str(output_path),
+        "--outfmt", "6", "sseqid", "sseq",
+        "--max-target-seqs", str(top_n),
+        "--evalue", str(evalue),
+        f"--{sensitivity}",
+    ]
+    print(f"  Command: {' '.join(str(a) for a in cmd)}")
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    # DIAMOND writes progress to stderr — always print so failures are visible
+    if proc.stderr:
+        for line in proc.stderr.splitlines():
+            print(f"  [diamond] {line}")
+    if proc.returncode != 0:
+        detail = (proc.stdout or "(no stdout)").strip()
+        raise RuntimeError(f"diamond blastp failed (exit {proc.returncode}):\n{detail}")
+
+    hits: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    with output_path.open() as fh:
+        for line in fh:
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) >= 2:
+                sid = parts[0].strip()
+                seq = parts[1].strip().replace("-", "")  # strip alignment gaps
+                if sid not in seen and seq:
+                    seen.add(sid)
+                    hits.append((sid, seq))
+    print(f"  DIAMOND returned {len(hits)} unique hits")
+    return hits
+
+
+def search_with_diamond_prefilter(
+    query_fasta: Path,
+    corpus_fasta: Optional[Path] = None,
+    diamond_db: Optional[Path] = None,
+    diamond_bin: Optional[str] = None,
+    diamond_top_n: int = 500,
+    diamond_evalue: float = 0.001,
+    diamond_sensitivity: str = "sensitive",
+    model_name: str = "tattabio/gLM2_650M_embed",
+    batch_size: int = 8,
+    max_length: int = 4096,
+    top_k: int = 10,
+    dataset_limit: Optional[int] = None,
+    expected_fasta: Optional[Path] = None,
+    streaming: bool = False,
+) -> dict:
+    """
+    Two-stage search: DIAMOND blastp for fast recall, gLM2 cosine similarity for precision.
+
+    If corpus_fasta does not exist it is created by exporting OG_prot90 from the
+    HuggingFace cache (respecting dataset_limit).  The DIAMOND database is built
+    automatically alongside the corpus file on the first run and reused thereafter.
+    """
+    print("\n=== GLM2 + DIAMOND Pre-filter Search ===")
+    print(f"Model         : {model_name}")
+    print(f"Query         : {query_fasta}")
+
+    diamond_exe = _find_diamond_binary(diamond_bin)
+    print(f"Diamond binary: {diamond_exe}")
+
+    # ---- 1. Resolve paths; export FASTA only if DB doesn't already exist ----
+    if corpus_fasta is None:
+        corpus_fasta = Path("og90_corpus.fasta")
+
+    # ---- 2. DIAMOND search ----
+    if diamond_db is None:
+        diamond_db = corpus_fasta.with_suffix("")  # strip .fasta → use as db prefix
+    elif Path(diamond_db).suffix == ".dmnd":
+        diamond_db = Path(diamond_db).with_suffix("")  # user passed path with extension — strip it
+
+    db_file = Path(str(diamond_db) + ".dmnd")
+    if db_file.exists():
+        if corpus_fasta.exists():
+            print(f"Corpus FASTA  : {corpus_fasta} (exists)")
+        else:
+            print(f"Corpus FASTA  : not present (DIAMOND DB already built, skipping export)")
+    else:
+        if not corpus_fasta.exists():
+            export_corpus_to_fasta(corpus_fasta, limit=dataset_limit, streaming=streaming)
+        else:
+            print(f"Corpus FASTA  : {corpus_fasta} (exists, skipping export)")
+
+    # Use mktemp to get a path without creating a file — avoids Windows handle-locking issues
+    diamond_out = Path(tempfile.mktemp(suffix="_diamond_out.tsv"))  # noqa: S306
+
+    try:
+        hits = _run_diamond_blastp(
+            query_fasta=query_fasta,
+            corpus_fasta=corpus_fasta,
+            db_path=diamond_db,
+            output_path=diamond_out,
+            diamond_bin=diamond_exe,
+            top_n=diamond_top_n,
+            evalue=diamond_evalue,
+            sensitivity=diamond_sensitivity,
+        )
+    finally:
+        diamond_out.unlink(missing_ok=True)
+
+    if not hits:
+        print("WARNING: DIAMOND found no hits. Try --diamond-evalue 1 or --diamond-sensitivity more-sensitive.")
+        return {
+            "mode": "diamond_prefilter",
+            "diamond_hits": 0,
+            "results": [],
+        }
+
+    # ---- 3. Build candidate records from blastp sseq output ----
+    print(f"Loading {len(hits)} candidate sequences ...")
+    candidate_records: list[SequenceRecord] = []
+    if corpus_fasta.exists():
+        # Prefer full sequences from FASTA when available
+        hit_id_set = {sid for sid, _ in hits}
+        for record in SeqIO.parse(str(corpus_fasta), "fasta"):
+            if record.id in hit_id_set:
+                seq = str(record.seq).replace("*", "").replace(" ", "").upper()
+                if seq:
+                    candidate_records.append(SequenceRecord(
+                        seq_id=record.id,
+                        description=record.description,
+                        sequence=seq,
+                        source=str(corpus_fasta),
+                    ))
+    else:
+        # Use aligned sequences from blastp output (sseq column)
+        for sid, seq in hits:
+            candidate_records.append(SequenceRecord(
+                seq_id=sid,
+                description=sid,
+                sequence=seq.upper(),
+                source=str(diamond_db),
+            ))
+    print(f"  Loaded {len(candidate_records)} candidates")
+
+    query_records = load_fasta(query_fasta)
+
+    # ---- 4. gLM2 embedding + cosine re-rank ----
+    print(f"\nEmbedding {len(candidate_records)} candidates + {len(query_records)} queries with gLM2 ...")
+    embedder = GLM2Embedder(model_name=model_name, batch_size=batch_size, max_length=max_length)
+
+    cand_emb = _l2_normalize_rows(
+        embedder.embed_sequences([r.sequence for r in candidate_records]).astype(np.float32)
+    )
+    q_emb = _l2_normalize_rows(
+        embedder.embed_sequences([r.sequence for r in query_records]).astype(np.float32)
+    )
+
+    top_k_eff = max(1, min(top_k, len(candidate_records)))
+    results = []
+    for query, qe in zip(query_records, q_emb):
+        scores = cand_emb @ qe
+        order = np.argsort(-scores)[:top_k_eff]
+        matches = []
+        for rank, cidx in enumerate(order, start=1):
+            c = candidate_records[int(cidx)]
+            matches.append({
+                "rank": rank,
+                "corpus_id": c.seq_id,
+                "corpus_description": c.description,
+                "similarity_score": float(scores[int(cidx)]),
+                "corpus_sequence": c.sequence,
+            })
+        results.append({
+            "query_id": query.seq_id,
+            "query_description": query.description,
+            "query_length": len(query.sequence),
+            "matches": matches,
+        })
+
+    output: dict = {
+        "mode": "diamond_prefilter",
+        "model": model_name,
+        "corpus_source": str(corpus_fasta),
+        "diamond_hits": len(hits),
+        "candidates_embedded": len(candidate_records),
+        "query_file": str(query_fasta),
+        "query_count": len(query_records),
+        "top_k": top_k,
+        "results": results,
+    }
+
+    if expected_fasta:
+        print(f"\nValidating against reference {expected_fasta} ...")
+        expected_seqs = load_fasta(expected_fasta)
+        expected_fps = {sequence_fingerprint(s.sequence): s.seq_id for s in expected_seqs}
+        validation = []
+        for res in results:
+            actual_fps = [sequence_fingerprint(h["corpus_sequence"]) for h in res["matches"]]
+            hits = [expected_fps[fp] for fp in actual_fps if fp in expected_fps]
+            validation.append({
+                "query_id": res["query_id"],
+                "top_match_ids": [h["corpus_id"] for h in res["matches"][:3]],
+                "expected_in_top_k": len(hits) > 0,
+                "matched_ids": hits,
+            })
+        output["validation"] = {
+            "reference_file": str(expected_fasta),
+            "reference_count": len(expected_seqs),
+            "results": validation,
+        }
+
+    return output
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GLM2 sequence search using Qdrant and OG_prot90 corpus.")
     parser.add_argument("query_fasta", type=Path, help="Query FASTA file")
     parser.add_argument("--model", default="tattabio/gLM2_650M_embed", help="HF model name for embedding")
-    parser.add_argument("--batch-size", type=int, default=32, help="Embedding batch size (default: 32, auto-backoff on OOM)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Embedding batch size (default: 8, auto-backoff on OOM)")
+    parser.add_argument("--max-length", type=int, default=4096, help="Tokenizer max length for truncation (default: 4096)")
     parser.add_argument("--top-k", type=int, default=10, help="Return top-k matches per query (default: 10)")
     parser.add_argument("--qdrant-url", default="http://localhost:6333", help="Qdrant server URL (default: http://localhost:6333)")
+    parser.add_argument("--qdrant-timeout", type=int, default=300, help="Qdrant HTTP timeout in seconds (default: 300)")
+    parser.add_argument("--qdrant-retries", type=int, default=5, help="Retries for Qdrant timeout errors (default: 5)")
     parser.add_argument("--collection-name", default="glm2_og90", help="Qdrant collection name (default: glm2_og90)")
+    parser.add_argument("--corpus-fasta", type=Path, help="Local FASTA corpus to search (minimal mode, skips HF/Qdrant)")
     parser.add_argument("--dataset-limit", type=int, help="Limit corpus size for testing (default: no limit)")
+    parser.add_argument(
+        "--corpus-chunk-size",
+        type=int,
+        default=500,
+        help="Corpus records processed per embed/upsert chunk (default: 500)",
+    )
+    parser.add_argument(
+        "--upsert-batch-size",
+        type=int,
+        default=50,
+        help="Qdrant upsert batch size within each chunk (default: 50)",
+    )
     parser.add_argument("--no-recreate", action="store_true", help="Don't recreate collection if it exists (default: recreate)")
     parser.add_argument("--expected-fasta", type=Path, help="Reference FASTA for validation (default: none)")
-    parser.add_argument("--output", type=Path, default="results.json", help="Output JSON file path (default: results.json)")
-    
-    args = parser.parse_args()
-    
-    result = search_and_validate(
-        query_fasta=args.query_fasta,
-        model_name=args.model,
-        batch_size=args.batch_size,
-        top_k=args.top_k,
-        qdrant_url=args.qdrant_url,
-        collection_name=args.collection_name,
-        dataset_limit=args.dataset_limit,
-        recreate=not args.no_recreate,
-        expected_fasta=args.expected_fasta,
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="Use HuggingFace streaming instead of download-first cache mode (default: download-first)",
     )
+    parser.add_argument("--output", type=Path, default="results.json", help="Output JSON file path (default: results.json)")
+
+    # DIAMOND pre-filter options
+    parser.add_argument(
+        "--diamond-prefilter", action="store_true",
+        help="Two-stage search: DIAMOND blastp for recall, gLM2 cosine for precision",
+    )
+    parser.add_argument(
+        "--diamond-corpus", type=Path, default=None,
+        help="Corpus FASTA for DIAMOND (created from OG_prot90 if absent; default: og90_corpus.fasta)",
+    )
+    parser.add_argument(
+        "--diamond-db", type=Path, default=None,
+        help="DIAMOND database prefix (built alongside --diamond-corpus if absent)",
+    )
+    parser.add_argument(
+        "--diamond-bin", default=None,
+        help="Path to diamond executable (default: auto-detect bin/diamond.exe then PATH)",
+    )
+    parser.add_argument(
+        "--diamond-top-n", type=int, default=500,
+        help="Max DIAMOND hits passed to gLM2 re-ranking (default: 500)",
+    )
+    parser.add_argument(
+        "--diamond-evalue", type=float, default=0.001,
+        help="DIAMOND e-value cutoff (default: 0.001; use 1 for very remote homologs)",
+    )
+    parser.add_argument(
+        "--diamond-sensitivity", default="sensitive",
+        choices=["fast", "mid-sensitive", "sensitive", "more-sensitive", "very-sensitive", "ultra-sensitive"],
+        help="DIAMOND sensitivity mode (default: sensitive)",
+    )
+
+    args = parser.parse_args()
+
+    if args.diamond_prefilter:
+        result = search_with_diamond_prefilter(
+            query_fasta=args.query_fasta,
+            corpus_fasta=args.diamond_corpus,
+            diamond_db=args.diamond_db,
+            diamond_bin=args.diamond_bin,
+            diamond_top_n=args.diamond_top_n,
+            diamond_evalue=args.diamond_evalue,
+            diamond_sensitivity=args.diamond_sensitivity,
+            model_name=args.model,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
+            top_k=args.top_k,
+            dataset_limit=args.dataset_limit,
+            expected_fasta=args.expected_fasta,
+            streaming=args.streaming,
+        )
+    elif args.corpus_fasta:
+        result = search_local_fasta(
+            query_fasta=args.query_fasta,
+            corpus_fasta=args.corpus_fasta,
+            model_name=args.model,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
+            top_k=args.top_k,
+            expected_fasta=args.expected_fasta,
+        )
+    else:
+        result = search_and_validate(
+            query_fasta=args.query_fasta,
+            model_name=args.model,
+            batch_size=args.batch_size,
+            max_length=args.max_length,
+            top_k=args.top_k,
+            qdrant_url=args.qdrant_url,
+            qdrant_timeout=args.qdrant_timeout,
+            qdrant_retries=args.qdrant_retries,
+            collection_name=args.collection_name,
+            dataset_limit=args.dataset_limit,
+            corpus_chunk_size=args.corpus_chunk_size,
+            upsert_batch_size=args.upsert_batch_size,
+            streaming=args.streaming,
+            recreate=not args.no_recreate,
+            expected_fasta=args.expected_fasta,
+        )
     
     output = json.dumps(result, indent=2)
     if args.output:
