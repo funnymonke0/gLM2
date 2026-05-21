@@ -736,6 +736,7 @@ def search_with_diamond_prefilter(
     diamond_top_n: int = 500,
     diamond_evalue: float = 0.001,
     diamond_sensitivity: str = "sensitive",
+    diamond_hits_file: Optional[Path] = None,
     model_name: str = "tattabio/gLM2_650M_embed",
     batch_size: int = 8,
     max_length: int = 4096,
@@ -780,22 +781,40 @@ def search_with_diamond_prefilter(
         else:
             print(f"Corpus FASTA  : {corpus_fasta} (exists, skipping export)")
 
-    # Use mktemp to get a path without creating a file — avoids Windows handle-locking issues
-    diamond_out = Path(tempfile.mktemp(suffix="_diamond_out.tsv"))  # noqa: S306
-
-    try:
-        hits = _run_diamond_blastp(
-            query_fasta=query_fasta,
-            corpus_fasta=corpus_fasta,
-            db_path=diamond_db,
-            output_path=diamond_out,
-            diamond_bin=diamond_exe,
-            top_n=diamond_top_n,
-            evalue=diamond_evalue,
-            sensitivity=diamond_sensitivity,
-        )
-    finally:
-        diamond_out.unlink(missing_ok=True)
+    # ---- 2b. Load cached hits or run DIAMOND blastp ----
+    if diamond_hits_file and Path(diamond_hits_file).exists():
+        print(f"Loading cached DIAMOND hits from {diamond_hits_file} ...")
+        hits: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        with open(diamond_hits_file) as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2:
+                    sid, seq = parts[0].strip(), parts[1].strip().replace("-", "")
+                    if sid not in seen and seq:
+                        seen.add(sid)
+                        hits.append((sid, seq))
+        print(f"  Loaded {len(hits)} cached hits")
+    else:
+        # Use mktemp to get a path without creating a file — avoids Windows handle-locking issues
+        diamond_out = Path(tempfile.mktemp(suffix="_diamond_out.tsv"))  # noqa: S306
+        try:
+            hits = _run_diamond_blastp(
+                query_fasta=query_fasta,
+                corpus_fasta=corpus_fasta,
+                db_path=diamond_db,
+                output_path=diamond_out,
+                diamond_bin=diamond_exe,
+                top_n=diamond_top_n,
+                evalue=diamond_evalue,
+                sensitivity=diamond_sensitivity,
+            )
+        finally:
+            if diamond_hits_file and diamond_out.exists():
+                diamond_out.rename(diamond_hits_file)
+                print(f"  Saved DIAMOND hits to {diamond_hits_file}")
+            else:
+                diamond_out.unlink(missing_ok=True)
 
     if not hits:
         print("WARNING: DIAMOND found no hits. Try --diamond-evalue 1 or --diamond-sensitivity more-sensitive.")
@@ -882,15 +901,30 @@ def search_with_diamond_prefilter(
     if expected_fasta:
         print(f"\nValidating against reference {expected_fasta} ...")
         expected_seqs = load_fasta(expected_fasta)
+        # Build lookup by sequence fingerprint (works when sseq = full sequence)
         expected_fps = {sequence_fingerprint(s.sequence): s.seq_id for s in expected_seqs}
+        # Build lookup by normalized ID: forward→+, reverse→- for robust ID matching
+        def _normalize_strand(seq_id: str) -> str:
+            return seq_id.replace("|forward|", "|+|").replace("|reverse|", "|-|")
+        expected_norm_ids = {_normalize_strand(s.seq_id): s.seq_id for s in expected_seqs}
         validation = []
         for res in results:
-            actual_fps = [sequence_fingerprint(h["corpus_sequence"]) for h in res["matches"]]
-            hits = [expected_fps[fp] for fp in actual_fps if fp in expected_fps]
+            matched: dict[str, str] = {}  # normalized_corpus_id → reference_id
+            for h in res["matches"]:
+                cid = h["corpus_id"]
+                norm_cid = _normalize_strand(cid)
+                # ID-based match (primary — works even with truncated sseq)
+                if norm_cid in expected_norm_ids:
+                    matched[cid] = expected_norm_ids[norm_cid]
+                # Fingerprint-based fallback (for cases where IDs differ but sequence matches)
+                elif sequence_fingerprint(h["corpus_sequence"]) in expected_fps:
+                    matched[cid] = expected_fps[sequence_fingerprint(h["corpus_sequence"])]
+            hits = list(matched.values())
             validation.append({
                 "query_id": res["query_id"],
                 "top_match_ids": [h["corpus_id"] for h in res["matches"][:3]],
                 "expected_in_top_k": len(hits) > 0,
+                "matched_count": len(hits),
                 "matched_ids": hits,
             })
         output["validation"] = {
@@ -966,6 +1000,10 @@ if __name__ == "__main__":
         choices=["fast", "mid-sensitive", "sensitive", "more-sensitive", "very-sensitive", "ultra-sensitive"],
         help="DIAMOND sensitivity mode (default: sensitive)",
     )
+    parser.add_argument(
+        "--diamond-hits-file", type=Path, default=None,
+        help="Cache file for DIAMOND hits (TSV: sseqid\\tsseq). If it exists, skip blastp and load from cache.",
+    )
 
     args = parser.parse_args()
 
@@ -978,6 +1016,7 @@ if __name__ == "__main__":
             diamond_top_n=args.diamond_top_n,
             diamond_evalue=args.diamond_evalue,
             diamond_sensitivity=args.diamond_sensitivity,
+            diamond_hits_file=args.diamond_hits_file,
             model_name=args.model,
             batch_size=args.batch_size,
             max_length=args.max_length,
