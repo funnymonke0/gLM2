@@ -728,6 +728,48 @@ def _run_diamond_blastp(
     return hits
 
 
+def _build_full_seqs_cache(hit_ids: set[str], output_path: Path) -> int:
+    """
+    Stream OG_prot90 from HuggingFace and save full sequences for the given hit IDs.
+
+    Both DIAMOND hit IDs and OG_prot90 HF IDs use +/- for strand (e.g. |+| / |-|).
+    No normalization is needed — IDs match directly.
+    """
+    remaining = set(hit_ids)
+
+    print(f"Streaming OG_prot90 from HuggingFace to fetch {len(remaining)} full sequences ...")
+    print("  (Requires internet; may take 1-4 hrs to scan all 85 M sequences; no full dataset cached)")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    found = 0
+    total_scanned = 0
+
+    tmp_path = output_path.with_suffix(".tmp")
+    try:
+        ds = datasets.load_dataset("tattabio/OG_prot90", split="train", streaming=True)
+        with tmp_path.open("w") as fh:
+            for row in ds:
+                if not remaining:
+                    break
+                total_scanned += 1
+                row_id = str(row.get("id", ""))
+                if row_id in remaining:
+                    seq = str(row.get("sequence", "")).strip().upper()
+                    if seq:
+                        fh.write(f">{row_id}\n{seq}\n")
+                        found += 1
+                    remaining.discard(row_id)
+                if total_scanned % 1_000_000 == 0:
+                    print(f"  Scanned {total_scanned / 1e6:.0f}M seqs, found {found}/{len(hit_ids)} ...", flush=True)
+        tmp_path.replace(output_path)  # atomic rename — only exists if complete
+    except Exception:
+        tmp_path.unlink(missing_ok=True)  # don't leave a partial file
+        raise
+
+    print(f"  Done: {found}/{len(hit_ids)} sequences found after scanning {total_scanned / 1e6:.1f}M records")
+    return found
+
+
 def search_with_diamond_prefilter(
     query_fasta: Path,
     corpus_fasta: Optional[Path] = None,
@@ -737,6 +779,7 @@ def search_with_diamond_prefilter(
     diamond_evalue: float = 0.001,
     diamond_sensitivity: str = "sensitive",
     diamond_hits_file: Optional[Path] = None,
+    full_seqs_cache: Optional[Path] = None,
     model_name: str = "tattabio/gLM2_650M_embed",
     batch_size: int = 8,
     max_length: int = 4096,
@@ -824,30 +867,62 @@ def search_with_diamond_prefilter(
             "results": [],
         }
 
-    # ---- 3. Build candidate records from blastp sseq output ----
+    # ---- 3. Build candidate records ----
+    # Priority: full_seqs_cache > corpus_fasta > sseq (DIAMOND aligned region)
+    # Using full sequences instead of aligned regions gives better gLM2 embeddings
+    # for distant homologs where the alignment may cover only part of the protein.
     print(f"Loading {len(hits)} candidate sequences ...")
     candidate_records: list[SequenceRecord] = []
-    if corpus_fasta.exists():
-        # Prefer full sequences from FASTA when available
-        hit_id_set = {sid for sid, _ in hits}
-        for record in SeqIO.parse(str(corpus_fasta), "fasta"):
+    hit_id_set = {sid for sid, _ in hits}
+    hit_sseq: dict[str, str] = {sid: seq for sid, seq in hits}  # fallback sseq by id
+
+    def _load_candidates_from_fasta(fasta_path: Path) -> list[SequenceRecord]:
+        loaded = []
+        for record in SeqIO.parse(str(fasta_path), "fasta"):
             if record.id in hit_id_set:
                 seq = str(record.seq).replace("*", "").replace(" ", "").upper()
                 if seq:
-                    candidate_records.append(SequenceRecord(
+                    loaded.append(SequenceRecord(
                         seq_id=record.id,
                         description=record.description,
                         sequence=seq,
-                        source=str(corpus_fasta),
+                        source=str(fasta_path),
                     ))
+        return loaded
+
+    def _fill_missing_with_sseq(records: list[SequenceRecord]) -> list[SequenceRecord]:
+        """Append sseq fallback for any hit IDs not yet in records."""
+        covered = {r.seq_id for r in records}
+        missing = hit_id_set - covered
+        if missing:
+            print(f"  WARNING: {len(missing)} hits not in FASTA; falling back to aligned region (sseq)")
+        for sid in missing:
+            seq = hit_sseq.get(sid, "")
+            if seq:
+                records.append(SequenceRecord(seq_id=sid, description=sid, sequence=seq.upper(), source=str(diamond_db)))
+        return records
+
+    cache_path = Path(full_seqs_cache) if full_seqs_cache else None
+    cache_ready = cache_path is not None and cache_path.exists() and cache_path.stat().st_size > 0
+
+    if cache_ready and cache_path is not None:
+        print(f"  Using full-sequence cache: {cache_path}")
+        candidate_records = _load_candidates_from_fasta(cache_path)
+        candidate_records = _fill_missing_with_sseq(candidate_records)
+    elif corpus_fasta.exists():
+        candidate_records = _load_candidates_from_fasta(corpus_fasta)
+        candidate_records = _fill_missing_with_sseq(candidate_records)
+    elif cache_path:
+        # Build cache by streaming OG_prot90 from HF, then load
+        _build_full_seqs_cache(hit_id_set, cache_path)
+        candidate_records = _load_candidates_from_fasta(cache_path)
+        candidate_records = _fill_missing_with_sseq(candidate_records)
     else:
-        # Use aligned sequences from blastp output (sseq column)
+        # Use aligned region (sseq) — lower quality for distant homologs
+        print("  NOTE: using DIAMOND aligned regions (sseq). Pass --full-seqs-cache to fetch full sequences.")
         for sid, seq in hits:
             candidate_records.append(SequenceRecord(
-                seq_id=sid,
-                description=sid,
-                sequence=seq.upper(),
-                source=str(diamond_db),
+                seq_id=sid, description=sid, sequence=seq.upper(), source=str(diamond_db),
             ))
     print(f"  Loaded {len(candidate_records)} candidates")
 
@@ -919,13 +994,13 @@ def search_with_diamond_prefilter(
                 # Fingerprint-based fallback (for cases where IDs differ but sequence matches)
                 elif sequence_fingerprint(h["corpus_sequence"]) in expected_fps:
                     matched[cid] = expected_fps[sequence_fingerprint(h["corpus_sequence"])]
-            hits = list(matched.values())
+            matched_ref_ids = list(matched.values())
             validation.append({
                 "query_id": res["query_id"],
                 "top_match_ids": [h["corpus_id"] for h in res["matches"][:3]],
-                "expected_in_top_k": len(hits) > 0,
-                "matched_count": len(hits),
-                "matched_ids": hits,
+                "expected_in_top_k": len(matched_ref_ids) > 0,
+                "matched_count": len(matched_ref_ids),
+                "matched_ids": matched_ref_ids,
             })
         output["validation"] = {
             "reference_file": str(expected_fasta),
@@ -1004,6 +1079,12 @@ if __name__ == "__main__":
         "--diamond-hits-file", type=Path, default=None,
         help="Cache file for DIAMOND hits (TSV: sseqid\\tsseq). If it exists, skip blastp and load from cache.",
     )
+    parser.add_argument(
+        "--full-seqs-cache", type=Path, default=None,
+        help="FASTA of full (non-truncated) sequences for DIAMOND hit IDs. "
+             "If absent, streams OG_prot90 from HuggingFace to build it (~1-4 hrs). "
+             "Greatly improves gLM2 ranking vs. DIAMOND aligned regions (sseq).",
+    )
 
     args = parser.parse_args()
 
@@ -1017,6 +1098,7 @@ if __name__ == "__main__":
             diamond_evalue=args.diamond_evalue,
             diamond_sensitivity=args.diamond_sensitivity,
             diamond_hits_file=args.diamond_hits_file,
+            full_seqs_cache=args.full_seqs_cache,
             model_name=args.model,
             batch_size=args.batch_size,
             max_length=args.max_length,
