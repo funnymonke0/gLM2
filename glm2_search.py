@@ -85,9 +85,12 @@ class GLM2Embedder:
         )
 
     def embed_batch(self, sequences: Sequence[str]) -> np.ndarray:
-        """Embed a batch of sequences."""
+        """Embed a batch of sequences. Prepends '<+>' per gLM2 pre-training convention."""
+        # gLM2 was pre-trained with strand-prefix tokens (<+> for forward).
+        # Prepending <+> to every sequence ensures on-distribution embeddings.
+        prefixed = [f"<+>{s}" for s in sequences]
         tokens = self.tokenizer(
-            sequences,
+            prefixed,
             max_length=self.max_length,
             truncation=True,
             padding=True,
@@ -812,17 +815,20 @@ def search_with_diamond_prefilter(
     elif Path(diamond_db).suffix == ".dmnd":
         diamond_db = Path(diamond_db).with_suffix("")  # user passed path with extension — strip it
 
-    db_file = Path(str(diamond_db) + ".dmnd")
-    if db_file.exists():
-        if corpus_fasta.exists():
-            print(f"Corpus FASTA  : {corpus_fasta} (exists)")
+    # Skip corpus/DB setup entirely when a pre-built hits cache will be used
+    hits_cache_ready = diamond_hits_file is not None and Path(diamond_hits_file).exists()
+    if not hits_cache_ready:
+        db_file = Path(str(diamond_db) + ".dmnd")
+        if db_file.exists():
+            if corpus_fasta.exists():
+                print(f"Corpus FASTA  : {corpus_fasta} (exists)")
+            else:
+                print(f"Corpus FASTA  : not present (DIAMOND DB already built, skipping export)")
         else:
-            print(f"Corpus FASTA  : not present (DIAMOND DB already built, skipping export)")
-    else:
-        if not corpus_fasta.exists():
-            export_corpus_to_fasta(corpus_fasta, limit=dataset_limit, streaming=streaming)
-        else:
-            print(f"Corpus FASTA  : {corpus_fasta} (exists, skipping export)")
+            if not corpus_fasta.exists():
+                export_corpus_to_fasta(corpus_fasta, limit=dataset_limit, streaming=streaming)
+            else:
+                print(f"Corpus FASTA  : {corpus_fasta} (exists, skipping export)")
 
     # ---- 2b. Load cached hits or run DIAMOND blastp ----
     if diamond_hits_file and Path(diamond_hits_file).exists():
@@ -913,10 +919,15 @@ def search_with_diamond_prefilter(
         candidate_records = _load_candidates_from_fasta(corpus_fasta)
         candidate_records = _fill_missing_with_sseq(candidate_records)
     elif cache_path:
-        # Build cache by streaming OG_prot90 from HF, then load
-        _build_full_seqs_cache(hit_id_set, cache_path)
-        candidate_records = _load_candidates_from_fasta(cache_path)
-        candidate_records = _fill_missing_with_sseq(candidate_records)
+        # Cache path was given but the file doesn't exist yet.
+        # Fall back to sseq rather than silently triggering a multi-hour HF streaming download.
+        # To build the cache upfront, run _build_full_seqs_cache() directly or use a prior result.
+        print(f"  WARNING: full-seqs cache not found at {cache_path}; falling back to DIAMOND aligned regions (sseq).")
+        print("  Re-run with an existing --full-seqs-cache file to use full sequences and improve rankings.")
+        for sid, seq in hits:
+            candidate_records.append(SequenceRecord(
+                seq_id=sid, description=sid, sequence=seq.upper(), source=str(diamond_db),
+            ))
     else:
         # Use aligned region (sseq) — lower quality for distant homologs
         print("  NOTE: using DIAMOND aligned regions (sseq). Pass --full-seqs-cache to fetch full sequences.")
